@@ -509,15 +509,46 @@
                         class="font-label-caps text-label-caps text-on-surface-variant mb-md relative z-10 tracking-widest uppercase">
                         Scan Your Skin</div>
 
-                    <!-- Face scan image -->
+                    <!-- Face scan tracker — inline SVG (no local asset dependency) -->
                     <div
                         class="relative w-48 h-64 border-2 border-primary/20 dark:border-primary-fixed/20 rounded-xl flex items-center justify-center mb-md bg-surface-container-lowest dark:bg-surface-container overflow-hidden shadow-inner">
                         <!-- Scan line animation -->
                         <div class="absolute inset-0 z-10 pointer-events-none overflow-hidden rounded-xl">
                             <div class="mesh-line"></div>
                         </div>
-                        <img alt="Facial Silhouette Scan" class="w-full h-full object-cover opacity-90 dark:opacity-70"
-                            src="https://lh3.googleusercontent.com/aida/AP1WRLvaYMBTyeSyuBB1dMoeea0TWt8b0Glg3k0RB01fHsrwOoAaN39pbENi4zP_XKkUL6tVv3afbI2OouaK5UcAQIS2qe2Z4q-p1ZE6hS8MAHSeMYxgfJ4kF-b3Bh7fTaIBH24uzBT6Fsso7Y15GcMziR3QnABfRBTPnRlfeL8gal5o0Ab_EbIPMNhlj_PrWkh8sXMtkqVsXmJbSO8zNw4ODil48MVItzGz50QeigxxBw4eRUWPUjJNcvzum6o" />
+                        <svg class="w-36 h-52 opacity-90 dark:opacity-75 relative z-[1]" viewBox="0 0 160 220"
+                            fill="none" xmlns="http://www.w3.org/2000/svg" aria-label="Facial Silhouette Scan"
+                            role="img">
+                            <!-- Soft face oval -->
+                            <ellipse cx="80" cy="100" rx="52" ry="68" stroke="#29695b" stroke-width="2.5"
+                                fill="rgba(175,239,221,0.18)" />
+                            <!-- Jaw / chin taper -->
+                            <path d="M36 118 Q40 168 80 186 Q120 168 124 118" stroke="#29695b" stroke-width="2.2"
+                                fill="none" stroke-linecap="round" />
+                            <!-- Brow guides -->
+                            <path d="M52 78 Q66 70 80 78" stroke="#29695b" stroke-width="1.6" fill="none"
+                                opacity="0.7" stroke-linecap="round" />
+                            <path d="M80 78 Q94 70 108 78" stroke="#29695b" stroke-width="1.6" fill="none"
+                                opacity="0.7" stroke-linecap="round" />
+                            <!-- Eye markers -->
+                            <circle cx="64" cy="96" r="4" fill="#29695b" opacity="0.55" />
+                            <circle cx="96" cy="96" r="4" fill="#29695b" opacity="0.55" />
+                            <!-- Nose bridge -->
+                            <path d="M80 100 L80 122 M80 122 L72 128 M80 122 L88 128" stroke="#29695b"
+                                stroke-width="1.5" fill="none" opacity="0.65" stroke-linecap="round" />
+                            <!-- Mouth arc -->
+                            <path d="M66 142 Q80 152 94 142" stroke="#29695b" stroke-width="1.6" fill="none"
+                                opacity="0.7" stroke-linecap="round" />
+                            <!-- Corner tracking brackets -->
+                            <path d="M28 48 L28 36 L40 36" stroke="#00342b" stroke-width="2" fill="none"
+                                stroke-linecap="round" />
+                            <path d="M132 48 L132 36 L120 36" stroke="#00342b" stroke-width="2" fill="none"
+                                stroke-linecap="round" />
+                            <path d="M28 172 L28 184 L40 184" stroke="#00342b" stroke-width="2" fill="none"
+                                stroke-linecap="round" />
+                            <path d="M132 172 L132 184 L120 184" stroke="#00342b" stroke-width="2" fill="none"
+                                stroke-linecap="round" />
+                        </svg>
                     </div>
 
                     <!-- CTA Buttons -->
@@ -1182,39 +1213,12 @@
                         <h3
                             class="font-headline-md text-headline-md text-on-surface border-b border-outline-variant/50 pb-2">
                             My Digital Shelf</h3>
-                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                            <div
-                                class="bg-surface-container-lowest dark:bg-surface-container border border-outline-variant dark:border-outline/30 rounded-xl p-4 flex gap-4 items-center">
-                                <img alt="Serum"
-                                    class="w-16 h-20 object-contain bg-white rounded border border-outline-variant/50"
-                                    src="https://lh3.googleusercontent.com/aida/AP1WRLvuZlY5gnoNKZSmD4xh8YC_w7axKYkiw-H82yzFI-3uk-12ObS8mTvAQ5mF4zniT0XeGC7jvC5xCRmyDwWadem9gbUyMHil2vH6HnFWHcBIg5E5xKaT_Co4A6hrUr0LTqrd6UI0ic7KVXQ0hI-q73MA8bOT-RvaITLQq_PRC_IOmlaImaiEiIo9rAOKv4lkpUO2i1FW1PSJWagexY6ToKSq7oUxa7gY3NXKVxbbDbD2BRAAdzQzKaijrHU" />
-                                <div class="flex-grow">
-                                    <h4 class="font-headline-sm font-semibold text-on-surface">Advanced Hydration</h4>
-                                    <p class="text-xs text-on-surface-variant mb-2">Last bought: Oct 12</p>
-                                    <button
-                                        class="bg-surface-container-high hover:bg-surface-variant text-on-surface font-label-caps text-xs py-1 px-3 rounded flex items-center gap-1 transition-colors"
-                                        onclick="showCheckoutToast()">
-                                        <span class="material-symbols-outlined text-sm"
-                                            data-icon="shopping_cart">shopping_cart</span> Buy Again
-                                    </button>
-                                </div>
-                            </div>
-                            <div
-                                class="bg-surface-container-lowest dark:bg-surface-container border border-outline-variant dark:border-outline/30 rounded-xl p-4 flex gap-4 items-center">
-                                <img alt="Cream"
-                                    class="w-16 h-20 object-contain bg-white rounded border border-outline-variant/50"
-                                    src="https://lh3.googleusercontent.com/aida/AP1WRLvuZlY5gnoNKZSmD4xh8YC_w7axKYkiw-H82yzFI-3uk-12ObS8mTvAQ5mF4zniT0XeGC7jvC5xCRmyDwWadem9gbUyMHil2vH6HnFWHcBIg5E5xKaT_Co4A6hrUr0LTqrd6UI0ic7KVXQ0hI-q73MA8bOT-RvaITLQq_PRC_IOmlaImaiEiIo9rAOKv4lkpUO2i1FW1PSJWagexY6ToKSq7oUxa7gY3NXKVxbbDbD2BRAAdzQzKaijrHU" />
-                                <div class="flex-grow">
-                                    <h4 class="font-headline-sm font-semibold text-on-surface">Barrier Repair</h4>
-                                    <p class="text-xs text-on-surface-variant mb-2">Last bought: Sep 05</p>
-                                    <button
-                                        class="bg-surface-container-high hover:bg-surface-variant text-on-surface font-label-caps text-xs py-1 px-3 rounded flex items-center gap-1 transition-colors"
-                                        onclick="showCheckoutToast()">
-                                        <span class="material-symbols-outlined text-sm"
-                                            data-icon="shopping_cart">shopping_cart</span> Buy Again
-                                    </button>
-                                </div>
-                            </div>
+                        <div id="digital-shelf-empty"
+                            class="hidden text-center py-10 text-on-surface-variant font-body-sm">
+                            No saved products yet. Bookmark a winner from your scan results to build your shelf.
+                        </div>
+                        <div id="digital-shelf-grid" class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <!-- Populated by fetchDigitalShelf() -->
                         </div>
                     </div>
                 </div>
@@ -1592,10 +1596,62 @@
             }
         }
 
-        // ── API Configuration ──
-        const API_BASE = 'http://localhost:5000/api';
+        // ── API Configuration (synced with PORT in .env → 5000) ──────────────
+        const API_PORT = 5000;
+        const API_BASE = (() => {
+            // Prefer same-origin /api when the SPA is served by Express on PORT
+            try {
+                if (location.protocol.startsWith('http') &&
+                    (location.port === String(API_PORT) ||
+                        (location.port === '' && location.hostname === 'localhost'))) {
+                    return `${location.origin}/api`;
+                }
+            } catch (_) { /* file:// or restricted context */ }
+            return `http://localhost:${API_PORT}/api`;
+        })();
         const API_URL = API_BASE + '/auth'; // kept for backward compat
-        const SERVER_ERROR_MSG = 'Cannot connect to server. Please ensure backend is running on port 5000.';
+        const SERVER_ERROR_MSG = `Cannot connect to server. Please ensure backend is running on port ${API_PORT}.`;
+        const FALLBACK_PRODUCT_IMAGE = '/images/default-clinical-bottle.png';
+
+        // Inline bookmark icon (no icon-font dependency — always visible)
+        const SVG_BOOKMARK = `<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>`;
+
+        /** Robust <img> fallback — never leave a broken placeholder */
+        function handleImgError(img) {
+            if (!img || img.dataset.fallbackApplied === '1') return;
+            img.dataset.fallbackApplied = '1';
+            img.src = FALLBACK_PRODUCT_IMAGE;
+        }
+
+        /**
+         * Fetch a product image from POST /api/scan/product-image.
+         * Strict response key: { imageUrl: string }
+         */
+        async function fetchProductImageUrl(productName) {
+            if (!productName || String(productName).trim().length < 2) {
+                return FALLBACK_PRODUCT_IMAGE;
+            }
+            try {
+                const res = await fetch(`${API_BASE}/scan/product-image`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ productName: String(productName).trim() }),
+                });
+                const json = await res.json();
+                if (json && typeof json.imageUrl === 'string' && json.imageUrl.length > 0) {
+                    return json.imageUrl;
+                }
+            } catch (err) {
+                console.warn('[ProductImage] fetch failed:', err.message);
+            }
+            return FALLBACK_PRODUCT_IMAGE;
+        }
+
+        /** Resolve imageUrl from mixed legacy / canonical payloads */
+        function resolveImageUrl(obj) {
+            if (!obj || typeof obj !== 'object') return FALLBACK_PRODUCT_IMAGE;
+            return obj.imageUrl || obj.image_url || obj.image || obj.product_image_url || FALLBACK_PRODUCT_IMAGE;
+        }
 
         async function handleSignup() {
             const name = document.getElementById('signup-name').value.trim();
@@ -1749,6 +1805,11 @@
             // Fetch history only when the dedicated Dashboard (history) view becomes visible
             if (targetId === 'state-dashboard') {
                 fetchScanHistory();
+            }
+
+            // Load Digital Shelf when Profile view opens
+            if (targetId === 'state-profile') {
+                fetchDigitalShelf();
             }
 
             // ── Active state: Sidebar nav links
@@ -2089,8 +2150,12 @@
             <circle cx="7" cy="10" r="0.7" fill="#ef4444"/>
         </svg>`;
 
+        // Last rendered verdict — used by bookmark / shelf save
+        let lastVerdictData = null;
+
         // ── Render the full results UI from AI JSON ────────────────────────
         function renderVerdictUI(data) {
+            lastVerdictData = data;
             const { top_winner: w, alternatives: alts } = data;
             const winnerEl = document.getElementById('winner-card');
             const altGrid = document.getElementById('alternatives-grid');
@@ -2106,7 +2171,11 @@
                     🏆 #1 Top Match for You
                   </div>
                   <div class="w-48 h-64 flex items-center justify-center bg-surface-container rounded-lg my-4 border border-outline-variant/20 overflow-hidden">
-                    <span class="material-symbols-outlined text-7xl text-outline-variant">inventory_2</span>
+                    <img id="winner-product-img"
+                      src="${FALLBACK_PRODUCT_IMAGE}"
+                      alt="${escHtml(w.product_name || 'Product')}"
+                      class="w-full h-full object-contain p-2"
+                      onerror="handleImgError(this)" />
                   </div>
                   <div class="flex items-center gap-2 bg-[#d4e6e5] text-[#0e1e1e] px-4 py-2 rounded-full font-semibold text-sm mt-2">
                     <span class="material-symbols-outlined text-green-700" style="font-size:16px;">check_circle</span>
@@ -2152,8 +2221,11 @@
                       class="flex-grow bg-[#ff9900] hover:bg-[#e38800] text-black py-3 rounded font-headline-md font-medium transition-colors shadow-sm active:scale-95 flex items-center justify-center gap-2 no-underline">
                       <span class="material-symbols-outlined">shopping_cart</span> Buy on Amazon @ ₹${w.price_inr}
                     </a>
-                    <button class="p-3 border border-outline-variant rounded text-on-surface-variant hover:text-primary hover:bg-surface-container transition-colors" title="Save to My Routine">
-                      <span class="material-symbols-outlined">bookmark_add</span>
+                    <button type="button" id="btn-bookmark-winner"
+                      onclick="saveProductToShelf()"
+                      class="p-3 border border-outline-variant rounded text-on-surface-variant hover:text-primary hover:bg-surface-container transition-colors flex items-center justify-center min-w-[48px]"
+                      title="Save to My Digital Shelf" aria-label="Save to My Digital Shelf">
+                      ${SVG_BOOKMARK}
                     </button>
                   </div>
                 </div>
@@ -2177,8 +2249,12 @@
                 const card = document.createElement('div');
                 card.className = 'snap-start flex-shrink-0 w-[85vw] md:w-auto bg-surface-container-lowest dark:bg-surface-container border border-outline-variant dark:border-outline/30 rounded-xl overflow-hidden flex flex-col shadow-sm';
                 card.innerHTML = `
-                  <div class="h-36 bg-surface-container-low flex items-center justify-center p-4">
-                    <span class="material-symbols-outlined text-6xl text-outline-variant/50">inventory_2</span>
+                  <div class="h-36 bg-surface-container-low flex items-center justify-center p-4 overflow-hidden">
+                    <img id="alt-product-img-${i}"
+                      src="${FALLBACK_PRODUCT_IMAGE}"
+                      alt="${escHtml(alt.product_name || 'Product')}"
+                      class="h-full w-full object-contain"
+                      onerror="handleImgError(this)" />
                   </div>
                   <div class="p-4 flex flex-col flex-grow gap-2">
                     <h4 class="font-semibold text-on-surface text-sm leading-snug">${escHtml(alt.product_name)}</h4>
@@ -2225,6 +2301,80 @@
             altSection.classList.remove('hidden');
             window.scrollTo({ top: 0, behavior: 'smooth' });
             showToast('✅ Clinical verdict ready.', 'success');
+
+            // Hydrate product images via strict imageUrl key from /api/scan/product-image
+            hydrateVerdictImages(w, alts || []);
+        }
+
+        async function hydrateVerdictImages(winner, alts) {
+            if (winner && winner.product_name) {
+                const imageUrl = await fetchProductImageUrl(winner.product_name);
+                winner.imageUrl = imageUrl;
+                const img = document.getElementById('winner-product-img');
+                if (img) img.src = imageUrl;
+            }
+            await Promise.all((alts || []).map(async (alt, i) => {
+                if (!alt || !alt.product_name) return;
+                const imageUrl = await fetchProductImageUrl(alt.product_name);
+                alt.imageUrl = imageUrl;
+                const img = document.getElementById(`alt-product-img-${i}`);
+                if (img) img.src = imageUrl;
+            }));
+        }
+
+        /** Bookmark the current top-winner product onto My Digital Shelf */
+        async function saveProductToShelf() {
+            const token = localStorage.getItem('token');
+            if (!token) {
+                showToast('Log in to save products to your shelf.', 'warning');
+                openAuthModal();
+                return;
+            }
+            const w = lastVerdictData && lastVerdictData.top_winner;
+            if (!w || !w.product_name) {
+                return showToast('No product available to save.', 'warning');
+            }
+
+            const btn = document.getElementById('btn-bookmark-winner');
+            if (btn) btn.disabled = true;
+
+            try {
+                // Ensure we have a canonical imageUrl before persisting
+                let imageUrl = w.imageUrl || resolveImageUrl(w);
+                if (!imageUrl || imageUrl === FALLBACK_PRODUCT_IMAGE) {
+                    imageUrl = await fetchProductImageUrl(w.product_name);
+                    w.imageUrl = imageUrl;
+                }
+
+                const res = await fetch(`${API_BASE}/shelf/save`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${token}`,
+                    },
+                    body: JSON.stringify({
+                        product_name: w.product_name,
+                        brand: w.brand || '',
+                        price: w.price_inr || 0,
+                        imageUrl,
+                        amazon_url: w.amazon_url || '',
+                        clinical_match_score: w.clinical_match_pct || 0,
+                    }),
+                });
+                const json = await res.json();
+                if (!res.ok || !json.success) {
+                    throw new Error(json.message || 'Could not save product.');
+                }
+                showToast('📌 Saved to My Digital Shelf.', 'success');
+                if (btn) {
+                    btn.classList.add('text-primary', 'border-primary');
+                    btn.title = 'Saved to My Digital Shelf';
+                }
+            } catch (err) {
+                showToast(err.message || SERVER_ERROR_MSG, 'error');
+            } finally {
+                if (btn) btn.disabled = false;
+            }
         }
 
         // ── HTML escaping utility ────────────────────────────────────────────
@@ -2410,6 +2560,9 @@
             return CONCERN_COLORS[category] || CONCERN_COLORS['General Analysis'];
         }
 
+        // In-memory cache so history cards can reopen full verdicts safely
+        const historyScanCache = new Map();
+
         function renderHistoryCard(scan) {
             const date = new Date(scan.createdAt || scan.created_at);
             const dateStr = date.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
@@ -2421,20 +2574,31 @@
             card.setAttribute('role', 'article');
             card.setAttribute('aria-label', `Scan result: ${scan.concern_category}`);
 
-            // Placeholder product image (top section)
-            const imgSrc = scan.product_image_url ||
-                'https://lh3.googleusercontent.com/aida/AP1WRLvuZlY5gnoNKZSmD4xh8YC_w7axKYkiw-H82yzFI-3uk-12ObS8mTvAQ5mF4zniT0XeGC7jvC5xCRmyDwWadem9gbUyMHil2vH6HnFWHcBIg5E5xKaT_Co4A6hrUr0LTqrd6UI0ic7KVXQ0hI-q73MA8bOT-RvaITLQq_PRC_IOmlaImaiEiIo9rAOKv4lkpUO2i1FW1PSJWagexY6ToKSq7oUxa7gY3NXKVxbbDbD2BRAAdzQzKaijrHU';
+            const scanKey = String(scan._id || `tmp-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+            historyScanCache.set(scanKey, scan);
+
+            const winner = (scan.ai_full_json_result && scan.ai_full_json_result.top_winner) || {};
+            const productName = winner.product_name || '';
+            const imgSrc = resolveImageUrl({
+                imageUrl: scan.imageUrl || winner.imageUrl,
+                image_url: scan.scan_image_url || winner.image_url,
+                product_image_url: scan.product_image_url,
+            });
+            const imgId = `history-img-${scanKey}`;
 
             card.innerHTML = `
                 <div class="relative h-36 bg-surface-container-low flex items-center justify-center overflow-hidden">
-                    <img src="${imgSrc}" alt="Product" class="h-full w-full object-cover mix-blend-multiply dark:mix-blend-normal opacity-80" />
-                    <div class="absolute inset-0 bg-gradient-to-t from-surface-container-lowest/80 to-transparent"></div>
+                    <img id="${imgId}" src="${escHtml(imgSrc)}" alt="Product"
+                        class="h-full w-full object-contain p-2 mix-blend-multiply dark:mix-blend-normal opacity-90"
+                        onerror="handleImgError(this)" />
+                    <div class="absolute inset-0 bg-gradient-to-t from-surface-container-lowest/80 to-transparent pointer-events-none"></div>
                 </div>
                 <div class="p-4 flex flex-col gap-2 flex-grow">
                     <div class="flex items-center gap-2">
                         <span class="w-2 h-2 rounded-full flex-shrink-0 ${c.dot}"></span>
-                        <span class="font-body-md font-semibold text-on-surface text-sm leading-tight">${scan.concern_category}</span>
+                        <span class="font-body-md font-semibold text-on-surface text-sm leading-tight">${escHtml(scan.concern_category)}</span>
                     </div>
+                    ${productName ? `<p class="text-xs text-on-surface-variant truncate">${escHtml(productName)}</p>` : ''}
                     <div class="flex items-center justify-between mt-1">
                         <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${c.bg} ${c.text}">
                             <span class="material-symbols-outlined" style="font-size:12px;">science</span>
@@ -2447,13 +2611,34 @@
                     </div>
                     <button
                         class="mt-auto w-full border border-primary text-primary dark:border-primary-fixed dark:text-primary-fixed py-2 rounded-lg font-label-caps text-xs hover:bg-primary/5 dark:hover:bg-primary-fixed/5 transition-all active:scale-95 flex items-center justify-center gap-1"
-                        onclick="switchView('state-results')">
+                        onclick="openHistoryResult('${scanKey}')">
                         <span class="material-symbols-outlined" style="font-size:14px;">open_in_new</span>
                         View Full Result
                     </button>
                 </div>
             `;
+
+            if (productName) {
+                fetchProductImageUrl(productName).then((imageUrl) => {
+                    const img = document.getElementById(imgId);
+                    if (img && imageUrl) img.src = imageUrl;
+                });
+            }
+
             return card;
+        }
+
+        function openHistoryResult(scanKey) {
+            const scan = historyScanCache.get(scanKey);
+            const data = scan && scan.ai_full_json_result;
+            switchView('state-results');
+            const loadingEl = document.getElementById('results-loading');
+            const errorEl = document.getElementById('results-error');
+            if (loadingEl) loadingEl.classList.add('hidden');
+            if (errorEl) errorEl.classList.add('hidden');
+            if (data && data.top_winner) {
+                renderVerdictUI(data);
+            }
         }
 
         async function fetchScanHistory() {
@@ -2468,6 +2653,7 @@
             [loading, empty, authPrompt].forEach(el => el && el.classList.add('hidden'));
             if (cards) cards.innerHTML = '';
             if (badge) badge.classList.add('hidden');
+            historyScanCache.clear();
 
             if (!token) {
                 if (authPrompt) authPrompt.classList.remove('hidden');
@@ -2526,11 +2712,18 @@
             }
         }
 
-        async function saveScanResult(concern_category = 'General Analysis') {
+        async function saveScanResult(concern_category = 'General Analysis', ai_full_json_result = {}) {
             const token = localStorage.getItem('token');
             if (!token) return; // guest mode — no save
 
             try {
+                const winner = ai_full_json_result.top_winner || {};
+                let scan_image_url = winner.imageUrl || null;
+                if (!scan_image_url && winner.product_name) {
+                    scan_image_url = await fetchProductImageUrl(winner.product_name);
+                    winner.imageUrl = scan_image_url;
+                }
+
                 await fetch(`${API_BASE}/scan/save`, {
                     method: 'POST',
                     headers: {
@@ -2539,12 +2732,96 @@
                     },
                     body: JSON.stringify({
                         concern_category,
-                        ai_full_json_result: { timestamp: new Date().toISOString(), source: 'cosmolyze-frontend' }
+                        ai_full_json_result,
+                        scan_image_url,
                     })
                 });
                 // No toast here — silent background save
             } catch (err) {
                 console.warn('[Save] Could not save scan result:', err.message);
+            }
+        }
+
+        // ── Digital Shelf ────────────────────────────────────────────────────
+        function renderShelfCard(product) {
+            const imageUrl = resolveImageUrl(product);
+            const name = product.product_name || 'Saved Product';
+            const brand = product.brand || '';
+            const price = product.price || 0;
+            const amazon = product.amazon_url || '#';
+            const added = product.added_at
+                ? new Date(product.added_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })
+                : '';
+
+            const card = document.createElement('div');
+            card.className = 'bg-surface-container-lowest dark:bg-surface-container border border-outline-variant dark:border-outline/30 rounded-xl p-4 flex gap-4 items-center';
+            card.innerHTML = `
+                <img alt="${escHtml(name)}"
+                    class="w-16 h-20 object-contain bg-white rounded border border-outline-variant/50 flex-shrink-0"
+                    src="${escHtml(imageUrl)}"
+                    onerror="handleImgError(this)" />
+                <div class="flex-grow min-w-0">
+                    <h4 class="font-headline-sm font-semibold text-on-surface truncate">${escHtml(name)}</h4>
+                    <p class="text-xs text-on-surface-variant mb-1 truncate">${escHtml(brand)}${price ? ` · ₹${price}` : ''}</p>
+                    ${added ? `<p class="text-xs text-on-surface-variant mb-2">Saved: ${added}</p>` : '<div class="mb-2"></div>'}
+                    <a href="${escHtml(amazon)}" target="_blank" rel="noopener"
+                        class="bg-surface-container-high hover:bg-surface-variant text-on-surface font-label-caps text-xs py-1 px-3 rounded inline-flex items-center gap-1 transition-colors no-underline">
+                        <span class="material-symbols-outlined text-sm" data-icon="shopping_cart">shopping_cart</span> Buy Again
+                    </a>
+                </div>`;
+            return card;
+        }
+
+        async function fetchDigitalShelf() {
+            const grid = document.getElementById('digital-shelf-grid');
+            const empty = document.getElementById('digital-shelf-empty');
+            if (!grid) return;
+
+            grid.innerHTML = '';
+            if (empty) empty.classList.add('hidden');
+
+            const token = localStorage.getItem('token');
+            if (!token) {
+                if (empty) {
+                    empty.textContent = 'Log in to view and manage your Digital Shelf.';
+                    empty.classList.remove('hidden');
+                }
+                return;
+            }
+
+            try {
+                const res = await fetch(`${API_BASE}/shelf`, {
+                    headers: { 'Authorization': `Bearer ${token}` },
+                });
+                if (!res.ok) {
+                    if (empty) {
+                        empty.textContent = 'Unable to load your shelf right now.';
+                        empty.classList.remove('hidden');
+                    }
+                    return;
+                }
+                const json = await res.json();
+                const products = (json.data && json.data.products) ? json.data.products : [];
+
+                if (!products.length) {
+                    if (empty) {
+                        empty.textContent = 'No saved products yet. Bookmark a winner from your scan results to build your shelf.';
+                        empty.classList.remove('hidden');
+                    }
+                    return;
+                }
+
+                products.forEach((p) => {
+                    // Ensure display uses .imageUrl
+                    p.imageUrl = resolveImageUrl(p);
+                    grid.appendChild(renderShelfCard(p));
+                });
+            } catch (err) {
+                console.warn('[Shelf] Could not fetch digital shelf:', err.message);
+                if (empty) {
+                    empty.textContent = 'Unable to load your shelf right now.';
+                    empty.classList.remove('hidden');
+                }
             }
         }
 

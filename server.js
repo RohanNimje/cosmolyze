@@ -7,6 +7,7 @@ const mongoose = require('mongoose');
 const authRoutes = require('./routes/auth');
 const scanRoutes = require('./routes/scan');
 const aiRoutes = require('./routes/ai');
+const shelfRoutes = require('./routes/shelf');
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //  SYSTEM PROMPTS — defined in ./prompts.js for easy editing without touching
@@ -28,6 +29,7 @@ app.get('/api', (req, res) => {
 app.use('/api/auth', authRoutes);
 app.use('/api/scan', scanRoutes);
 app.use('/api/ai', aiRoutes);
+app.use('/api/shelf', shelfRoutes);
 
 // ── SPA Fallback — serve index.html for non-API routes ─────────────────
 app.use((req, res, next) => {
@@ -52,10 +54,11 @@ app.use((err, req, res, next) => {
 
 // ── Database + Start Server ──────────────────────────────────────────────────
 const PORT = process.env.PORT || 5000;
-const MONGO_URI = process.env.MONGO_URI;
+// Support both MONGODB_URI (canonical) and MONGO_URI (legacy alias)
+const MONGO_URI = process.env.MONGODB_URI || process.env.MONGO_URI;
 
 if (!MONGO_URI) {
-  console.error('❌ MONGO_URI is not defined in .env');
+  console.error('❌ Database URI is not defined in .env — set MONGODB_URI (or MONGO_URI)');
   process.exit(1);
 }
 
