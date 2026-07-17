@@ -1,12 +1,23 @@
 /**
- * routes/ai.js — Cosmolyze Multimodal AI Engine
+ * routes/ai.js — Cosmolyze Hybrid AI Engine
+ *
+ * AI Workload Routing:
+ *   ┌─────────────────────────────────────────────────────────────┐
+ *   │  GEMINI (Vision)  →  analyze-face, generate-verdict        │
+ *   │  GROQ   (Text)    →  analyze-formula                       │
+ *   └─────────────────────────────────────────────────────────────┘
  *
  * Endpoints:
- *   POST /api/ai/analyze-face     → Gemini vision: generates 4 personalised questions
- *   POST /api/ai/generate-verdict → Gemini vision: generates full clinical product verdict
+ *   POST /api/ai/analyze-face     → Gemini: visual triage → 4 diagnostic questions
+ *   POST /api/ai/generate-verdict → Gemini: full clinical product verdict
+ *   POST /api/ai/analyze-formula  → Groq:  text-based ingredient clinical audit
  *
- * Both endpoints use native fetch (Node 18+) — no extra dependencies required.
- * System prompts are defined in server.js and imported here for clean separation.
+ * Retry Policy (both engines):
+ *   Attempt 1 → on 429/503 wait exactly 2000ms
+ *   Attempt 2 → on 429/503 wait exactly 4000ms
+ *   Attempt 3 → final fallback (no further wait)
+ *   All retries are strictly sequential — Attempt N+1 never starts until
+ *   Attempt N has fully failed and the backoff delay has elapsed.
  */
 
 const express = require('express');
@@ -19,21 +30,32 @@ const {
   FORMULA_SYSTEM_PROMPT,
 } = require('../prompts');
 
-// ── Gemini API Configuration ─────────────────────────────────────────────────
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-// Model is read from .env (GEMINI_MODEL=...) so it can be swapped without a code change.
-// Set GEMINI_MODEL in your .env to override (e.g. gemini-1.5-flash, gemini-2.0-flash, etc.)
-const MODEL_NAME = process.env.GEMINI_MODEL || 'gemini-2.0-flash';
-const GEMINI_ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL_NAME}:generateContent?key=${GEMINI_API_KEY}`;
+// ── API Configuration — read dynamically from process.env ────────────────────
+// Keys and models are resolved at request-time so hot-reloading env works.
+const getGeminiConfig = () => ({
+  apiKey: process.env.GEMINI_API_KEY,
+  model: process.env.GEMINI_MODEL || 'gemini-2.0-flash',
+});
 
-// ── Resilience Config ────────────────────────────────────────────────────────
-// Multimodal vision tasks on the free tier regularly take 15-25 s — 30 s gives
-// a safe ceiling without cutting off legitimate slow responses.
-const FETCH_TIMEOUT_MS = 60000; // 30 s hard timeout per attempt
-const MAX_RETRIES = 2;     // Retry up to 2 times on transient failures
-const BACKOFF_BASE_MS = 5000;  // 2 s base → back-off: 2 s, 4 s (gives API time to recover)
+const getGroqConfig = () => ({
+  apiKey: process.env.GROQ_API_KEY,
+  model: process.env.GROQ_MODEL || 'llama-3.3-70b-versatile',
+});
 
-// ── Helper: fetch with AbortController timeout ───────────────────────────────
+// ── Resilience Config ─────────────────────────────────────────────────────────
+const FETCH_TIMEOUT_MS = 60000; // 60 s hard timeout per attempt
+const MAX_ATTEMPTS = 3;          // 3 total attempts (2 retries)
+
+// Sequential backoff delays in milliseconds, indexed by attempt number (1-based).
+// Attempt 1 fails → wait BACKOFF_MS[1] = 2000ms before attempt 2
+// Attempt 2 fails → wait BACKOFF_MS[2] = 4000ms before attempt 3
+// Attempt 3 is the final — no backoff after it
+const BACKOFF_MS = { 1: 2000, 2: 4000 };
+
+// Transient HTTP status codes that trigger a retry
+const TRANSIENT_STATUSES = new Set([429, 502, 503]);
+
+// ── Helper: fetch with AbortController timeout ────────────────────────────────
 function fetchWithTimeout(url, options, timeoutMs) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -42,38 +64,62 @@ function fetchWithTimeout(url, options, timeoutMs) {
     .catch(err => { clearTimeout(timer); throw err; });
 }
 
-// ── Helper: call Gemini with optional image, timeout + auto-retry ─────────────
+// ── Helper: strict sequential sleep ──────────────────────────────────────────
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// ── Helper: safely strip markdown fences and parse JSON ──────────────────────
+// Both Gemini and Groq may wrap JSON in ```json ... ``` fences.
+function parseAIJSON(raw) {
+  const cleaned = raw
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/```\s*$/i, '')
+    .trim();
+  return JSON.parse(cleaned);
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+//  GEMINI ENGINE — Multimodal Vision Tasks
+//  Used for: analyze-face, generate-verdict
+// ═════════════════════════════════════════════════════════════════════════════
+
 /**
- * @param {string} systemPrompt  - The system instruction text
- * @param {string} userText      - The user-facing prompt text
- * @param {string|null} imageBase64 - Full data URI e.g. "data:image/jpeg;base64,..."
+ * Call the Gemini Generative Language API with strict sequential exponential backoff.
+ *
+ * Retry schedule:
+ *   Attempt 1 → fail (transient) → WAIT 2000ms (sequential, blocking)
+ *   Attempt 2 → fail (transient) → WAIT 4000ms (sequential, blocking)
+ *   Attempt 3 → final (no further retry)
+ *
+ * @param {string} systemPrompt   - System instruction for Gemini
+ * @param {string} userText       - User-facing prompt text
+ * @param {string|null} imageBase64 - Full data URI (e.g. "data:image/jpeg;base64,...")
  * @returns {string} Raw text response from Gemini
  */
 async function callGemini(systemPrompt, userText, imageBase64 = null) {
-  if (!GEMINI_API_KEY) {
+  const { apiKey, model } = getGeminiConfig();
+
+  if (!apiKey) {
     throw new Error('GEMINI_API_KEY is not configured in .env');
   }
 
-  // Build the parts array — text always first, then inline image if provided
-  const parts = [{ text: userText }];
+  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
 
+  // Build parts array — text first, then optional inline image
+  const parts = [{ text: userText }];
   if (imageBase64) {
-    // Strip the data URI prefix to get pure base64 + mime type
     const match = imageBase64.match(/^data:([^;]+);base64,(.+)$/);
-    if (!match) throw new Error('Invalid imageBase64 format — expected data URI');
+    if (!match) throw new Error('Invalid imageBase64 format — expected a valid data URI');
     const [, mimeType, b64data] = match;
-    parts.push({
-      inline_data: { mime_type: mimeType, data: b64data },
-    });
+    parts.push({ inline_data: { mime_type: mimeType, data: b64data } });
   }
 
   const body = {
     system_instruction: { parts: [{ text: systemPrompt }] },
     contents: [{ role: 'user', parts }],
     generationConfig: {
-      temperature: 0.3,        // Low temp for clinical precision
+      temperature: 0.3,
       maxOutputTokens: 8192,
-      responseMimeType: 'application/json', // Force JSON output
+      responseMimeType: 'application/json',
     },
   };
 
@@ -84,59 +130,173 @@ async function callGemini(systemPrompt, userText, imageBase64 = null) {
   };
 
   let lastError;
-  for (let attempt = 1; attempt <= MAX_RETRIES + 1; attempt++) {
+
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     try {
-      console.log(`[AI] Gemini attempt ${attempt}/${MAX_RETRIES + 1}...`);
-      const res = await fetchWithTimeout(GEMINI_ENDPOINT, fetchOptions, FETCH_TIMEOUT_MS);
+      console.log(`[AI] Gemini attempt ${attempt}/${MAX_ATTEMPTS} (model: ${model})...`);
+
+      const res = await fetchWithTimeout(endpoint, fetchOptions, FETCH_TIMEOUT_MS);
 
       if (!res.ok) {
         const errBody = await res.text();
-        // 429/503 are transient — retry; 400/404 are permanent — bail immediately
-        const isTransient = res.status === 429 || res.status === 503 || res.status === 502;
-        if (!isTransient) throw new Error(`Gemini API error ${res.status}: ${errBody}`);
-        lastError = new Error(`Gemini API error ${res.status} (transient)`);
-        console.warn(`[AI] Transient error on attempt ${attempt}:`, lastError.message);
-        if (attempt <= MAX_RETRIES) {
-          await new Promise(r => setTimeout(r, BACKOFF_BASE_MS * attempt)); // back-off: 2 s, 4 s
-          continue;
+
+        if (!TRANSIENT_STATUSES.has(res.status)) {
+          // Permanent error (400, 401, 404…) — no point retrying
+          throw new Error(`Gemini API permanent error ${res.status}: ${errBody}`);
         }
-        throw lastError;
+
+        lastError = new Error(`Gemini transient error ${res.status} on attempt ${attempt}`);
+        console.warn(`[AI] ${lastError.message}`);
+
+        // Sequential backoff — WAIT before the next attempt begins
+        if (attempt < MAX_ATTEMPTS) {
+          const waitMs = BACKOFF_MS[attempt];
+          console.log(`[AI] Waiting ${waitMs}ms before Gemini attempt ${attempt + 1}...`);
+          await sleep(waitMs); // strictly sequential — execution pauses here
+        }
+        continue;
       }
 
       const json = await res.json();
       const text = json?.candidates?.[0]?.content?.parts?.[0]?.text;
-      if (!text) throw new Error('Gemini returned an empty response');
+      if (!text) throw new Error('Gemini returned an empty response body');
       return text;
 
     } catch (err) {
-      const isTimeout = err.name === 'AbortError';
-      if (isTimeout) {
-        lastError = new Error(`Gemini request timed out after ${FETCH_TIMEOUT_MS / 1000}s (attempt ${attempt})`);
-        console.warn('[AI]', lastError.message);
-      } else if (!lastError || err !== lastError) {
+      if (err.name === 'AbortError') {
+        lastError = new Error(`Gemini timed out after ${FETCH_TIMEOUT_MS / 1000}s (attempt ${attempt})`);
+        console.warn(`[AI] ${lastError.message}`);
+      } else if (err !== lastError) {
         lastError = err;
+        console.warn(`[AI] Gemini attempt ${attempt} threw:`, err.message);
       }
-      if (attempt <= MAX_RETRIES && (isTimeout || err.name === 'FetchError')) {
-        await new Promise(r => setTimeout(r, 800 * attempt));
+
+      // Network/timeout errors are also retriable
+      if (attempt < MAX_ATTEMPTS && (err.name === 'AbortError' || err.name === 'FetchError' || err.name === 'TypeError')) {
+        const waitMs = BACKOFF_MS[attempt];
+        console.log(`[AI] Waiting ${waitMs}ms before Gemini retry ${attempt + 1}...`);
+        await sleep(waitMs);
         continue;
       }
-      throw lastError;
+
+      // Permanent errors bubble immediately without waiting
+      if (!TRANSIENT_STATUSES.has(err.status)) {
+        throw lastError;
+      }
     }
   }
-  throw lastError;
+
+  throw lastError || new Error('Gemini failed after all attempts');
 }
 
-// ── Helper: safely parse JSON from Gemini output ─────────────────────────────
-function parseGeminiJSON(raw) {
-  // Gemini sometimes wraps JSON in markdown code fences — strip them
-  const cleaned = raw.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/i, '').trim();
-  return JSON.parse(cleaned);
+// ═════════════════════════════════════════════════════════════════════════════
+//  GROQ ENGINE — Text-Only Tasks
+//  Used for: analyze-formula, expert clinical verdicts, product comparisons
+//  Protocol: OpenAI-compatible REST (no SDK needed)
+// ═════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Call the Groq OpenAI-compatible Chat Completions API with strict sequential
+ * exponential backoff (identical retry schedule to callGemini).
+ *
+ * @param {string} systemPrompt - System instruction
+ * @param {string} userText     - User message content
+ * @returns {string} Raw text response from Groq
+ */
+async function callGroq(systemPrompt, userText) {
+  const { apiKey, model } = getGroqConfig();
+
+  if (!apiKey) {
+    throw new Error('GROQ_API_KEY is not configured in .env');
+  }
+
+  const endpoint = 'https://api.groq.com/openai/v1/chat/completions';
+
+  const body = {
+    model,
+    messages: [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: userText },
+    ],
+    temperature: 0.3,
+    max_tokens: 8192,
+    response_format: { type: 'json_object' }, // Force JSON mode
+  };
+
+  const fetchOptions = {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify(body),
+  };
+
+  let lastError;
+
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    try {
+      console.log(`[AI] Groq attempt ${attempt}/${MAX_ATTEMPTS} (model: ${model})...`);
+
+      const res = await fetchWithTimeout(endpoint, fetchOptions, FETCH_TIMEOUT_MS);
+
+      if (!res.ok) {
+        const errBody = await res.text();
+
+        if (!TRANSIENT_STATUSES.has(res.status)) {
+          throw new Error(`Groq API permanent error ${res.status}: ${errBody}`);
+        }
+
+        lastError = new Error(`Groq transient error ${res.status} on attempt ${attempt}`);
+        console.warn(`[AI] ${lastError.message}`);
+
+        if (attempt < MAX_ATTEMPTS) {
+          const waitMs = BACKOFF_MS[attempt];
+          console.log(`[AI] Waiting ${waitMs}ms before Groq attempt ${attempt + 1}...`);
+          await sleep(waitMs); // strictly sequential
+        }
+        continue;
+      }
+
+      const json = await res.json();
+      const text = json?.choices?.[0]?.message?.content;
+      if (!text) throw new Error('Groq returned an empty response body');
+      return text;
+
+    } catch (err) {
+      if (err.name === 'AbortError') {
+        lastError = new Error(`Groq timed out after ${FETCH_TIMEOUT_MS / 1000}s (attempt ${attempt})`);
+        console.warn(`[AI] ${lastError.message}`);
+      } else if (err !== lastError) {
+        lastError = err;
+        console.warn(`[AI] Groq attempt ${attempt} threw:`, err.message);
+      }
+
+      if (attempt < MAX_ATTEMPTS && (err.name === 'AbortError' || err.name === 'FetchError' || err.name === 'TypeError')) {
+        const waitMs = BACKOFF_MS[attempt];
+        console.log(`[AI] Waiting ${waitMs}ms before Groq retry ${attempt + 1}...`);
+        await sleep(waitMs);
+        continue;
+      }
+
+      if (!TRANSIENT_STATUSES.has(err.status)) {
+        throw lastError;
+      }
+    }
+  }
+
+  throw lastError || new Error('Groq failed after all attempts');
 }
+
+// ═════════════════════════════════════════════════════════════════════════════
+//  ROUTES
+// ═════════════════════════════════════════════════════════════════════════════
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  POST /api/ai/analyze-face
-//  Body: { imageBase64: "data:image/jpeg;base64,..." }
-//  Response: { success: true, questions: ["Q1","Q2","Q3","Q4"], detected_concerns: [...] }
+//  Engine: GEMINI (multimodal vision)
+//  Body:   { imageBase64: "data:image/jpeg;base64,..." }
+//  Response: { success: true, data: { detected_concerns, questions } }
 // ─────────────────────────────────────────────────────────────────────────────
 router.post('/analyze-face', async (req, res) => {
   try {
@@ -151,11 +311,10 @@ router.post('/analyze-face', async (req, res) => {
 
     const userText = 'Please analyze this patient face image and generate the 4 personalised diagnostic questions as instructed.';
 
-    console.log('[AI] analyze-face: calling Gemini...');
+    console.log('[AI] analyze-face: routing to Gemini (vision task)...');
     const raw = await callGemini(FACE_ANALYSIS_SYSTEM_PROMPT, userText, imageBase64);
-    const parsed = parseGeminiJSON(raw);
+    const parsed = parseAIJSON(raw);
 
-    // Validate the expected shape
     if (!Array.isArray(parsed.questions) || parsed.questions.length !== 4) {
       console.error('[AI] analyze-face: unexpected response shape', parsed);
       return res.status(502).json({
@@ -165,7 +324,6 @@ router.post('/analyze-face', async (req, res) => {
     }
 
     console.log('[AI] analyze-face: success, concerns:', parsed.detected_concerns);
-
     return res.status(200).json({
       success: true,
       data: {
@@ -178,15 +336,16 @@ router.post('/analyze-face', async (req, res) => {
     console.error('[AI analyze-face Error]', err.message);
     return res.status(500).json({
       success: false,
-      message: `AI analysis failed: ${err.message}`,
+      message: `AI face analysis failed: ${err.message}`,
     });
   }
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  POST /api/ai/generate-verdict
-//  Body: { imageBase64, answers: [str, str, str, str], budgetMin: int, budgetMax: int }
-//  Response: { success: true, data: { top_winner: {...}, alternatives: [...] } }
+//  Engine: GEMINI (multimodal vision + text)
+//  Body:   { imageBase64, answers: [str×4], budgetMin: int, budgetMax: int }
+//  Response: { success: true, data: { top_winner, alternatives } }
 // ─────────────────────────────────────────────────────────────────────────────
 router.post('/generate-verdict', async (req, res) => {
   try {
@@ -206,7 +365,6 @@ router.post('/generate-verdict', async (req, res) => {
       });
     }
 
-    // Compose a structured user message with the patient's answers and budget
     const userText = `
 Patient Diagnostic Questionnaire Responses:
 1. ${answers[0] || 'No answer provided'}
@@ -219,11 +377,10 @@ Patient Budget Range: ₹${budgetMin} – ₹${budgetMax} INR
 Please analyse the face image alongside these answers and generate the full clinical verdict JSON as instructed.
 `.trim();
 
-    console.log('[AI] generate-verdict: calling Gemini, budget ₹', budgetMin, '–', budgetMax);
+    console.log('[AI] generate-verdict: routing to Gemini (vision task), budget ₹', budgetMin, '–', budgetMax);
     const raw = await callGemini(VERDICT_SYSTEM_PROMPT, userText, imageBase64);
-    const parsed = parseGeminiJSON(raw);
+    const parsed = parseAIJSON(raw);
 
-    // Validate top-level shape
     if (!parsed.top_winner || !Array.isArray(parsed.alternatives)) {
       console.error('[AI] generate-verdict: unexpected response shape', JSON.stringify(parsed).slice(0, 300));
       return res.status(502).json({
@@ -232,15 +389,11 @@ Please analyse the face image alongside these answers and generate the full clin
       });
     }
 
-    // Ensure we have exactly 4 alternatives
+    // Clamp to max 4 alternatives
     if (parsed.alternatives.length > 4) parsed.alternatives = parsed.alternatives.slice(0, 4);
 
     console.log('[AI] generate-verdict: success, winner:', parsed.top_winner.product_name);
-
-    return res.status(200).json({
-      success: true,
-      data: parsed,
-    });
+    return res.status(200).json({ success: true, data: parsed });
 
   } catch (err) {
     console.error('[AI generate-verdict Error]', err.message);
@@ -253,8 +406,9 @@ Please analyse the face image alongside these answers and generate the full clin
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  POST /api/ai/analyze-formula
-//  Body: { productName?: string, ingredientList: string }
-//  Response: { success: true, data: { summary, ingredients: [{name,rating,function,notes}], concerns: [], positives: [] } }
+//  Engine: GROQ (text-only — no image; optimised for large-context ingredient lists)
+//  Body:   { productName?: string, ingredientList: string }
+//  Response: { success: true, data: { summary, ingredients, concerns, positives } }
 // ─────────────────────────────────────────────────────────────────────────────
 router.post('/analyze-formula', async (req, res) => {
   try {
@@ -276,11 +430,10 @@ ${ingredientList.trim()}
 Please analyze this formula and return the full clinical JSON breakdown as instructed.
 `.trim();
 
-    console.log('[AI] analyze-formula: calling Gemini for', productName || 'unnamed product');
-    const raw = await callGemini(FORMULA_SYSTEM_PROMPT, userText);
-    const parsed = parseGeminiJSON(raw);
+    console.log('[AI] analyze-formula: routing to Groq (text task) for:', productName || 'unnamed product');
+    const raw = await callGroq(FORMULA_SYSTEM_PROMPT, userText);
+    const parsed = parseAIJSON(raw);
 
-    // Basic shape validation
     if (!Array.isArray(parsed.ingredients)) {
       console.error('[AI] analyze-formula: unexpected response shape', JSON.stringify(parsed).slice(0, 200));
       return res.status(502).json({
