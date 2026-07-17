@@ -354,6 +354,45 @@
             animation: shimmer 1.6s infinite linear;
         }
 
+        /* ── Premium product-image shimmer ─────────────────────────────────── */
+        @keyframes shimmerSweep {
+            0%   { background-position: -200% 0; }
+            100% { background-position:  200% 0; }
+        }
+        .shimmer-loading {
+            position: relative;
+            overflow: hidden;
+            background: linear-gradient(
+                90deg,
+                #e8eeeb 0%,
+                #e8eeeb 35%,
+                #f5faf7 50%,
+                #e8eeeb 65%,
+                #e8eeeb 100%
+            );
+            background-size: 200% 100%;
+            animation: shimmerSweep 1.35s ease-in-out infinite;
+        }
+        .dark .shimmer-loading {
+            background: linear-gradient(
+                90deg,
+                #2a3330 0%,
+                #2a3330 35%,
+                #3a4843 50%,
+                #2a3330 65%,
+                #2a3330 100%
+            );
+            background-size: 200% 100%;
+            animation: shimmerSweep 1.35s ease-in-out infinite;
+        }
+        .product-img-fade {
+            opacity: 0;
+            transition: opacity 0.45s ease;
+        }
+        .product-img-fade.is-loaded {
+            opacity: 1;
+        }
+
         /* Radar scanner */
         .clinical-scanner {
             position: relative;
@@ -1624,6 +1663,32 @@
         }
 
         /**
+         * Reveal a product image with fade-in and clear the shimmer skeleton.
+         * @param {HTMLImageElement|null} img
+         * @param {HTMLElement|null} frame  — container with .shimmer-loading
+         * @param {string} url
+         */
+        function revealProductImage(img, frame, url) {
+            if (!img) return;
+            const finish = () => {
+                img.classList.add('is-loaded');
+                if (frame) frame.classList.remove('shimmer-loading');
+            };
+            img.onload = finish;
+            img.onerror = () => {
+                handleImgError(img);
+                finish();
+            };
+            // Reset fade state for re-hydration
+            img.classList.remove('is-loaded');
+            img.dataset.fallbackApplied = '';
+            if (frame) frame.classList.add('shimmer-loading');
+            img.src = url || FALLBACK_PRODUCT_IMAGE;
+            // Cached images may already be complete
+            if (img.complete && img.naturalWidth > 0) finish();
+        }
+
+        /**
          * Fetch a product image from POST /api/scan/product-image.
          * Strict response key: { imageUrl: string }
          */
@@ -2170,11 +2235,12 @@
                   <div class="absolute top-4 left-4 bg-primary text-on-primary px-3 py-1 rounded-full font-label-caps text-label-caps inline-flex items-center gap-1 shadow-sm">
                     🏆 #1 Top Match for You
                   </div>
-                  <div class="w-48 h-64 flex items-center justify-center bg-surface-container rounded-lg my-4 border border-outline-variant/20 overflow-hidden">
+                  <div id="winner-product-frame"
+                    class="w-48 h-64 flex items-center justify-center bg-surface-container rounded-lg my-4 border border-outline-variant/20 overflow-hidden shimmer-loading">
                     <img id="winner-product-img"
-                      src="${FALLBACK_PRODUCT_IMAGE}"
+                      src=""
                       alt="${escHtml(w.product_name || 'Product')}"
-                      class="w-full h-full object-contain p-2"
+                      class="w-full h-full object-contain p-2 product-img-fade"
                       onerror="handleImgError(this)" />
                   </div>
                   <div class="flex items-center gap-2 bg-[#d4e6e5] text-[#0e1e1e] px-4 py-2 rounded-full font-semibold text-sm mt-2">
@@ -2249,11 +2315,12 @@
                 const card = document.createElement('div');
                 card.className = 'snap-start flex-shrink-0 w-[85vw] md:w-auto bg-surface-container-lowest dark:bg-surface-container border border-outline-variant dark:border-outline/30 rounded-xl overflow-hidden flex flex-col shadow-sm';
                 card.innerHTML = `
-                  <div class="h-36 bg-surface-container-low flex items-center justify-center p-4 overflow-hidden">
+                  <div id="alt-product-frame-${i}"
+                    class="h-36 bg-surface-container-low flex items-center justify-center p-4 overflow-hidden shimmer-loading">
                     <img id="alt-product-img-${i}"
-                      src="${FALLBACK_PRODUCT_IMAGE}"
+                      src=""
                       alt="${escHtml(alt.product_name || 'Product')}"
-                      class="h-full w-full object-contain"
+                      class="h-full w-full object-contain product-img-fade"
                       onerror="handleImgError(this)" />
                   </div>
                   <div class="p-4 flex flex-col flex-grow gap-2">
@@ -2307,19 +2374,28 @@
         }
 
         async function hydrateVerdictImages(winner, alts) {
+            // Text/JSON verdict is already on screen — images hydrate with shimmer → fade-in
             if (winner && winner.product_name) {
                 const imageUrl = await fetchProductImageUrl(winner.product_name);
                 winner.imageUrl = imageUrl;
-                const img = document.getElementById('winner-product-img');
-                if (img) img.src = imageUrl;
+                revealProductImage(
+                    document.getElementById('winner-product-img'),
+                    document.getElementById('winner-product-frame'),
+                    imageUrl
+                );
             }
-            await Promise.all((alts || []).map(async (alt, i) => {
-                if (!alt || !alt.product_name) return;
+            // Sequential requests so the backend 1000ms rate-limit queue stays orderly
+            for (let i = 0; i < (alts || []).length; i++) {
+                const alt = alts[i];
+                if (!alt || !alt.product_name) continue;
                 const imageUrl = await fetchProductImageUrl(alt.product_name);
                 alt.imageUrl = imageUrl;
-                const img = document.getElementById(`alt-product-img-${i}`);
-                if (img) img.src = imageUrl;
-            }));
+                revealProductImage(
+                    document.getElementById(`alt-product-img-${i}`),
+                    document.getElementById(`alt-product-frame-${i}`),
+                    imageUrl
+                );
+            }
         }
 
         /** Bookmark the current top-winner product onto My Digital Shelf */
@@ -2585,11 +2661,14 @@
                 product_image_url: scan.product_image_url,
             });
             const imgId = `history-img-${scanKey}`;
+            const frameId = `history-frame-${scanKey}`;
+            const needsLiveFetch = !!productName;
 
             card.innerHTML = `
-                <div class="relative h-36 bg-surface-container-low flex items-center justify-center overflow-hidden">
-                    <img id="${imgId}" src="${escHtml(imgSrc)}" alt="Product"
-                        class="h-full w-full object-contain p-2 mix-blend-multiply dark:mix-blend-normal opacity-90"
+                <div id="${frameId}"
+                    class="relative h-36 bg-surface-container-low flex items-center justify-center overflow-hidden ${needsLiveFetch ? 'shimmer-loading' : ''}">
+                    <img id="${imgId}" src="${needsLiveFetch ? '' : escHtml(imgSrc)}" alt="Product"
+                        class="h-full w-full object-contain p-2 mix-blend-multiply dark:mix-blend-normal product-img-fade ${needsLiveFetch ? '' : 'is-loaded'}"
                         onerror="handleImgError(this)" />
                     <div class="absolute inset-0 bg-gradient-to-t from-surface-container-lowest/80 to-transparent pointer-events-none"></div>
                 </div>
@@ -2620,9 +2699,24 @@
 
             if (productName) {
                 fetchProductImageUrl(productName).then((imageUrl) => {
-                    const img = document.getElementById(imgId);
-                    if (img && imageUrl) img.src = imageUrl;
+                    revealProductImage(
+                        card.querySelector(`#${imgId}`),
+                        card.querySelector(`#${frameId}`),
+                        imageUrl
+                    );
                 });
+            } else if (imgSrc && imgSrc !== FALLBACK_PRODUCT_IMAGE) {
+                revealProductImage(
+                    card.querySelector(`#${imgId}`),
+                    card.querySelector(`#${frameId}`),
+                    imgSrc
+                );
+            } else {
+                revealProductImage(
+                    card.querySelector(`#${imgId}`),
+                    card.querySelector(`#${frameId}`),
+                    FALLBACK_PRODUCT_IMAGE
+                );
             }
 
             return card;

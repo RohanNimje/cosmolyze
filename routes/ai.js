@@ -67,14 +67,253 @@ function fetchWithTimeout(url, options, timeoutMs) {
 // ── Helper: strict sequential sleep ──────────────────────────────────────────
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-// ── Helper: safely strip markdown fences and parse JSON ──────────────────────
-// Both Gemini and Groq may wrap JSON in ```json ... ``` fences.
-function parseAIJSON(raw) {
-  const cleaned = raw
-    .replace(/^```(?:json)?\s*/i, '')
-    .replace(/```\s*$/i, '')
+// ── Fallback payloads (keep the UI alive when AI JSON is unrecoverable) ──────
+const FACE_ANALYSIS_FALLBACK = {
+  detected_concerns: ['General skin assessment'],
+  questions: [
+    'What is your primary skin concern right now?',
+    'How sensitive is your skin to new active ingredients?',
+    'What does your current morning and night routine look like?',
+    'Do you have any known allergies or ingredients you must avoid?',
+  ],
+  _fallback: true,
+};
+
+const VERDICT_FALLBACK = {
+  top_winner: {
+    product_name: 'CeraVe Moisturising Cream',
+    brand: 'CeraVe',
+    price_inr: 899,
+    mrp_inr: 1099,
+    clinical_match_pct: 88,
+    what_it_is: 'A ceramide-rich barrier cream that restores moisture and supports a compromised skin barrier.',
+    key_actives: ['Ceramides 1/3/6-II', 'Hyaluronic Acid', 'Cholesterol'],
+    key_benefits: ['Barrier repair', 'Long-lasting hydration', 'Non-comedogenic'],
+    expert_verdict: 'A clinically reliable barrier formula suitable as a safe default while a full AI verdict is unavailable.',
+    amazon_url: 'https://www.amazon.in/s?k=CeraVe+Moisturising+Cream',
+  },
+  alternatives: [
+    {
+      product_name: 'Cetaphil Gentle Skin Cleanser',
+      brand: 'Cetaphil',
+      price_inr: 449,
+      optimal_active: 'Mild surfactants for non-stripping cleanse',
+      detected_sensitizer: null,
+      medical_alert: 'Low-irritation cleanser; suitable for most sensitive profiles.',
+      match_status: 'good',
+      amazon_url: 'https://www.amazon.in/s?k=Cetaphil+Gentle+Skin+Cleanser',
+    },
+    {
+      product_name: 'Minimalist 10% Niacinamide Serum',
+      brand: 'Minimalist',
+      price_inr: 399,
+      optimal_active: 'Niacinamide for barrier support and texture',
+      detected_sensitizer: null,
+      medical_alert: 'Introduce slowly if skin is highly reactive.',
+      match_status: 'neutral',
+      amazon_url: 'https://www.amazon.in/s?k=Minimalist+Niacinamide+10',
+    },
+    {
+      product_name: 'La Roche-Posay Cicaplast Baume B5',
+      brand: 'La Roche-Posay',
+      price_inr: 850,
+      optimal_active: 'Panthenol + madecassoside for repair',
+      detected_sensitizer: null,
+      medical_alert: 'Excellent rescue balm for irritated or recovering skin.',
+      match_status: 'good',
+      amazon_url: 'https://www.amazon.in/s?k=La+Roche-Posay+Cicaplast+Baume+B5',
+    },
+    {
+      product_name: 'The Ordinary AHA 30% + BHA 2% Peeling Solution',
+      brand: 'The Ordinary',
+      price_inr: 790,
+      optimal_active: 'High-strength AHA/BHA chemical exfoliation',
+      detected_sensitizer: 'Glycolic Acid / Salicylic Acid (high %)',
+      medical_alert: 'Potent acids — avoid on compromised, sensitive, or barrier-impaired skin.',
+      match_status: 'avoid',
+      amazon_url: 'https://www.amazon.in/s?k=The+Ordinary+AHA+30+BHA+2',
+    },
+  ],
+  _fallback: true,
+};
+
+const FORMULA_FALLBACK = {
+  product_name: 'Unknown Product',
+  overall_score: 70,
+  overall_rating: 'Fair',
+  summary: 'A complete clinical parse was unavailable. Please re-run the analysis for a full ingredient breakdown.',
+  concerns: ['Automated parse incomplete — re-analyse for precise sensitizer detection'],
+  positives: ['Re-submit the ingredient list to receive a full clinical audit'],
+  ingredients: [],
+  _fallback: true,
+};
+
+// ── JSON sanitization helpers ────────────────────────────────────────────────
+
+/** Strip ```json ... ``` fences (leading, trailing, or wrapped). */
+function stripMarkdownFences(raw) {
+  let s = String(raw ?? '').trim();
+  const fenced = s.match(/```(?:json|JSON)?\s*([\s\S]*?)```/);
+  if (fenced) return fenced[1].trim();
+  s = s.replace(/^```(?:json|JSON)?\s*/i, '').replace(/```\s*$/i, '');
+  return s.trim();
+}
+
+/** Slice from the first `{` to the last `}` so prose wrappers are dropped. */
+function extractJSONObject(s) {
+  const start = s.indexOf('{');
+  const end = s.lastIndexOf('}');
+  if (start === -1 || end === -1 || end <= start) return s;
+  return s.slice(start, end + 1);
+}
+
+/** Normalize smart quotes, BOM, and trailing commas. */
+function basicSanitize(s) {
+  return s
+    .replace(/^\uFEFF/, '')
+    .replace(/[\u201C\u201D\u00AB\u00BB]/g, '"')
+    .replace(/[\u2018\u2019]/g, "'")
+    .replace(/,\s*(?=[}\]])/g, '')
     .trim();
-  return JSON.parse(cleaned);
+}
+
+/**
+ * Escape bare double-quotes and control characters that appear inside JSON strings.
+ * Uses a simple state machine: if a `"` inside a string is not a valid terminator
+ * (followed by , } ] : or end), treat it as content and escape it.
+ */
+function fixUnescapedQuotesAndControls(jsonStr) {
+  let out = '';
+  let inString = false;
+
+  for (let i = 0; i < jsonStr.length; i++) {
+    const c = jsonStr[i];
+
+    if (!inString) {
+      out += c;
+      if (c === '"') inString = true;
+      continue;
+    }
+
+    // Inside a string value
+    if (c === '\\') {
+      out += c + (jsonStr[i + 1] ?? '');
+      i += 1;
+      continue;
+    }
+
+    if (c === '"') {
+      const look = jsonStr.slice(i + 1).match(/^\s*([,}\]:]|$)/);
+      if (look) {
+        inString = false;
+        out += c;
+      } else {
+        out += '\\"';
+      }
+      continue;
+    }
+
+    if (c === '\n' || c === '\r') {
+      out += '\\n';
+      continue;
+    }
+    if (c === '\t') {
+      out += '\\t';
+      continue;
+    }
+
+    out += c;
+  }
+
+  return out;
+}
+
+/** Close truncated JSON by appending missing quotes / brackets / braces. */
+function balanceBrackets(s) {
+  let inString = false;
+  let escape = false;
+  let braces = 0;
+  let brackets = 0;
+
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (escape) {
+      escape = false;
+      continue;
+    }
+    if (c === '\\' && inString) {
+      escape = true;
+      continue;
+    }
+    if (c === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (inString) continue;
+    if (c === '{') braces += 1;
+    else if (c === '}') braces -= 1;
+    else if (c === '[') brackets += 1;
+    else if (c === ']') brackets -= 1;
+  }
+
+  let repaired = s;
+  if (inString) repaired += '"';
+  while (brackets > 0) {
+    repaired += ']';
+    brackets -= 1;
+  }
+  while (braces > 0) {
+    repaired += '}';
+    braces -= 1;
+  }
+  return repaired.replace(/,\s*(?=[}\]])/g, '');
+}
+
+/**
+ * Fail-safe AI JSON parser.
+ * 1) Strip markdown / extract object / basic sanitize
+ * 2) Fix unescaped quotes & control chars
+ * 3) Balance truncated brackets
+ * On total failure: log raw_response and return `fallback` (never throw if fallback given).
+ */
+function parseAIJSON(raw, fallback = null, label = 'AI') {
+  const raw_response = String(raw ?? '');
+
+  const tryParse = (candidate, stage) => {
+    try {
+      return { ok: true, value: JSON.parse(candidate), stage };
+    } catch (err) {
+      return { ok: false, error: err, stage };
+    }
+  };
+
+  let cleaned = basicSanitize(extractJSONObject(stripMarkdownFences(raw_response)));
+
+  let result = tryParse(cleaned, 'basic-sanitize');
+  if (result.ok) return result.value;
+
+  const quoteFixed = fixUnescapedQuotesAndControls(cleaned);
+  result = tryParse(quoteFixed, 'quote-fix');
+  if (result.ok) return result.value;
+
+  const balanced = balanceBrackets(quoteFixed);
+  result = tryParse(balanced, 'balance-brackets');
+  if (result.ok) return result.value;
+
+  // Final attempt: sanitize the balanced form again
+  const lastPass = basicSanitize(fixUnescapedQuotesAndControls(balanced));
+  result = tryParse(lastPass, 'final-pass');
+  if (result.ok) return result.value;
+
+  console.error(`[AI] ${label} JSON.parse failed after sanitization: ${result.error.message}`);
+  console.error(`[AI] ${label} raw_response (full):\n${raw_response}`);
+
+  if (fallback && typeof fallback === 'object') {
+    console.warn(`[AI] ${label}: returning structured fallback JSON (_fallback: true)`);
+    return { ...fallback };
+  }
+
+  throw result.error;
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -313,30 +552,54 @@ router.post('/analyze-face', async (req, res) => {
 
     console.log('[AI] analyze-face: routing to Gemini (vision task)...');
     const raw = await callGemini(FACE_ANALYSIS_SYSTEM_PROMPT, userText, imageBase64);
-    const parsed = parseAIJSON(raw);
 
-    if (!Array.isArray(parsed.questions) || parsed.questions.length !== 4) {
-      console.error('[AI] analyze-face: unexpected response shape', parsed);
-      return res.status(502).json({
-        success: false,
-        message: 'AI returned an unexpected response. Please try again.',
-      });
+    let parsed;
+    try {
+      parsed = parseAIJSON(raw, FACE_ANALYSIS_FALLBACK, 'analyze-face');
+    } catch (parseErr) {
+      // parseAIJSON only throws when no fallback is provided — defensive path
+      console.error('[AI] analyze-face unrecoverable parse:', parseErr.message);
+      console.error('[AI] analyze-face raw_response:\n', raw);
+      parsed = { ...FACE_ANALYSIS_FALLBACK };
     }
 
-    console.log('[AI] analyze-face: success, concerns:', parsed.detected_concerns);
+    // Normalize shape if partially valid
+    if (!Array.isArray(parsed.questions) || parsed.questions.length !== 4) {
+      console.warn('[AI] analyze-face: invalid questions shape — applying fallback questions');
+      parsed = {
+        detected_concerns: Array.isArray(parsed.detected_concerns) && parsed.detected_concerns.length
+          ? parsed.detected_concerns
+          : FACE_ANALYSIS_FALLBACK.detected_concerns,
+        questions: FACE_ANALYSIS_FALLBACK.questions,
+        _fallback: true,
+      };
+    }
+
+    console.log(
+      '[AI] analyze-face: success',
+      parsed._fallback ? '(fallback)' : '',
+      'concerns:',
+      parsed.detected_concerns
+    );
     return res.status(200).json({
       success: true,
       data: {
         detected_concerns: parsed.detected_concerns || [],
         questions: parsed.questions,
+        ...(parsed._fallback ? { fallback: true } : {}),
       },
     });
 
   } catch (err) {
     console.error('[AI analyze-face Error]', err.message);
-    return res.status(500).json({
-      success: false,
-      message: `AI face analysis failed: ${err.message}`,
+    // Last-resort: never freeze the UI — return usable diagnostic questions
+    return res.status(200).json({
+      success: true,
+      data: {
+        ...FACE_ANALYSIS_FALLBACK,
+        fallback: true,
+        message: `AI face analysis degraded: ${err.message}`,
+      },
     });
   }
 });
@@ -379,27 +642,48 @@ Please analyse the face image alongside these answers and generate the full clin
 
     console.log('[AI] generate-verdict: routing to Gemini (vision task), budget ₹', budgetMin, '–', budgetMax);
     const raw = await callGemini(VERDICT_SYSTEM_PROMPT, userText, imageBase64);
-    const parsed = parseAIJSON(raw);
 
-    if (!parsed.top_winner || !Array.isArray(parsed.alternatives)) {
-      console.error('[AI] generate-verdict: unexpected response shape', JSON.stringify(parsed).slice(0, 300));
-      return res.status(502).json({
-        success: false,
-        message: 'AI returned an unexpected response structure. Please try again.',
-      });
+    let parsed;
+    try {
+      parsed = parseAIJSON(raw, VERDICT_FALLBACK, 'generate-verdict');
+    } catch (parseErr) {
+      console.error('[AI] generate-verdict unrecoverable parse:', parseErr.message);
+      console.error('[AI] generate-verdict raw_response:\n', raw);
+      parsed = { ...VERDICT_FALLBACK };
     }
 
-    // Clamp to max 4 alternatives
-    if (parsed.alternatives.length > 4) parsed.alternatives = parsed.alternatives.slice(0, 4);
+    if (!parsed.top_winner || !Array.isArray(parsed.alternatives)) {
+      console.warn('[AI] generate-verdict: unexpected shape — applying full verdict fallback');
+      parsed = { ...VERDICT_FALLBACK };
+    }
 
-    console.log('[AI] generate-verdict: success, winner:', parsed.top_winner.product_name);
-    return res.status(200).json({ success: true, data: parsed });
+    // Clamp to max 4 alternatives; pad if the model returned fewer
+    if (!Array.isArray(parsed.alternatives)) parsed.alternatives = [];
+    if (parsed.alternatives.length > 4) parsed.alternatives = parsed.alternatives.slice(0, 4);
+    while (parsed.alternatives.length < 4) {
+      parsed.alternatives.push(VERDICT_FALLBACK.alternatives[parsed.alternatives.length]);
+    }
+
+    console.log(
+      '[AI] generate-verdict: success',
+      parsed._fallback ? '(fallback)' : '',
+      'winner:',
+      parsed.top_winner.product_name
+    );
+    return res.status(200).json({
+      success: true,
+      data: parsed,
+      ...(parsed._fallback ? { fallback: true } : {}),
+    });
 
   } catch (err) {
     console.error('[AI generate-verdict Error]', err.message);
-    return res.status(500).json({
-      success: false,
-      message: `Verdict generation failed: ${err.message}`,
+    // Last-resort: return a valid verdict payload so the results UI can render
+    return res.status(200).json({
+      success: true,
+      data: { ...VERDICT_FALLBACK },
+      fallback: true,
+      message: `Verdict generation degraded: ${err.message}`,
     });
   }
 });
@@ -432,27 +716,52 @@ Please analyze this formula and return the full clinical JSON breakdown as instr
 
     console.log('[AI] analyze-formula: routing to Groq (text task) for:', productName || 'unnamed product');
     const raw = await callGroq(FORMULA_SYSTEM_PROMPT, userText);
-    const parsed = parseAIJSON(raw);
 
-    if (!Array.isArray(parsed.ingredients)) {
-      console.error('[AI] analyze-formula: unexpected response shape', JSON.stringify(parsed).slice(0, 200));
-      return res.status(502).json({
-        success: false,
-        message: 'AI returned an unexpected response. Please try again.',
-      });
+    let parsed;
+    try {
+      parsed = parseAIJSON(raw, { ...FORMULA_FALLBACK, product_name: productName || 'Unknown Product' }, 'analyze-formula');
+    } catch (parseErr) {
+      console.error('[AI] analyze-formula unrecoverable parse:', parseErr.message);
+      console.error('[AI] analyze-formula raw_response:\n', raw);
+      parsed = { ...FORMULA_FALLBACK, product_name: productName || 'Unknown Product' };
     }
 
-    console.log('[AI] analyze-formula: success,', parsed.ingredients.length, 'ingredients parsed.');
-    return res.status(200).json({ success: true, data: parsed });
+    if (!Array.isArray(parsed.ingredients)) {
+      console.warn('[AI] analyze-formula: missing ingredients array — applying fallback');
+      parsed = {
+        ...FORMULA_FALLBACK,
+        product_name: parsed.product_name || productName || 'Unknown Product',
+        summary: parsed.summary || FORMULA_FALLBACK.summary,
+      };
+    }
+
+    console.log(
+      '[AI] analyze-formula: success',
+      parsed._fallback ? '(fallback)' : '',
+      ',',
+      parsed.ingredients.length,
+      'ingredients parsed.'
+    );
+    return res.status(200).json({
+      success: true,
+      data: parsed,
+      ...(parsed._fallback ? { fallback: true } : {}),
+    });
 
   } catch (err) {
     console.error('[AI analyze-formula Error]', err.message);
     const isTimeout = err.message.includes('timed out');
-    return res.status(isTimeout ? 503 : 500).json({
-      success: false,
-      message: isTimeout
-        ? 'The AI server is busy. Please try again in a moment.'
-        : `Formula analysis failed: ${err.message}`,
+    // Degraded but renderable response — UI stays usable
+    return res.status(200).json({
+      success: true,
+      data: {
+        ...FORMULA_FALLBACK,
+        product_name: (req.body && req.body.productName) || 'Unknown Product',
+        summary: isTimeout
+          ? 'The AI server timed out. Please retry the formula analysis in a moment.'
+          : `Formula analysis degraded: ${err.message}`,
+      },
+      fallback: true,
     });
   }
 });

@@ -4,8 +4,9 @@
  * Endpoints:
  *   POST /api/scan/save          → Persist a scan result + update user streak
  *   GET  /api/scan/history       → Return last 20 scans for the authed user
- *   POST /api/scan/product-image → Fetch a product image via Google CSE with
- *                                   MongoDB TTL caching and concurrency dedup
+ *   POST /api/scan/product-image → Fetch a product image via DuckDuckGo with
+ *                                   MongoDB TTL caching, sequential rate-limit,
+ *                                   and concurrency dedup
  */
 
 const express = require('express');
@@ -16,85 +17,178 @@ const CachedProduct = require('../models/CachedProduct');
 
 const router = express.Router();
 
-// ── Google CSE Configuration ─────────────────────────────────────────────────
-// API key pool — keys are hot-swapped automatically when a 429 quota error
-// is received. Add more keys to the array to expand the rotation pool.
-const CSE_KEY_POOL = [
-  process.env.IMAGE_KEY_1,
-  process.env.IMAGE_KEY_2,
-].filter(Boolean); // drop any undefined/empty entries
-
-const CSE_CX = process.env.GOOGLE_CSE_CX;
-
 // ── In-Memory Concurrency Lock (Thundering Herd prevention) ──────────────────
-// Maps a normalised productName → Promise<string> (the inflight CSE fetch).
-// If two requests arrive for the same product simultaneously, the second one
-// awaits the first promise instead of firing a duplicate CSE request.
+// Maps a normalised productName → Promise<string> (the inflight DDG fetch).
 const inflightRequests = new Map();
 
-// ── Fallback image served when all CSE keys are exhausted ────────────────────
+// ── Sequential rate-limit queue (1000ms between product image fetches) ───────
+const DDG_FETCH_GAP_MS = 1000;
+let imageFetchChain = Promise.resolve();
+let lastDdgFetchAt = 0;
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Run image lookups strictly one-after-another with a 1000ms gap.
+ * Protects the local server IP from DuckDuckGo rate limits when
+ * hydrating ~5 product cards after a scan.
+ */
+function enqueueSequentialImageFetch(taskFn) {
+  const run = async () => {
+    const elapsed = Date.now() - lastDdgFetchAt;
+    const waitMs = Math.max(0, DDG_FETCH_GAP_MS - elapsed);
+    if (waitMs > 0) {
+      console.log(`[Scan] Sequential DDG delay ${waitMs}ms before next product fetch...`);
+      await sleep(waitMs);
+    }
+    lastDdgFetchAt = Date.now();
+    return taskFn();
+  };
+
+  const next = imageFetchChain.then(run, run);
+  // Keep the chain alive even if a task fails
+  imageFetchChain = next.catch(() => null);
+  return next;
+}
+
+// ── Fallback image when DuckDuckGo returns nothing usable ────────────────────
 const FALLBACK_IMAGE = '/images/default-clinical-bottle.png';
 
-// ── Helper: fetch a product image from Google CSE with key rotation ───────────
+/** Dummy/local fallback paths are treated as CACHE MISS so we re-fetch live URLs. */
+function isDummyCachedImage(imageUrl) {
+  if (!imageUrl || typeof imageUrl !== 'string') return true;
+  const normalized = imageUrl.trim().toLowerCase();
+  return (
+    normalized === FALLBACK_IMAGE.toLowerCase() ||
+    normalized.endsWith('/images/default-clinical-bottle.png') ||
+    normalized.includes('default-clinical-bottle')
+  );
+}
+
+const DDG_HEADERS = {
+  'User-Agent':
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+  Accept: 'application/json, text/javascript, */*; q=0.01',
+  'Accept-Language': 'en-US,en;q=0.9',
+  Referer: 'https://duckduckgo.com/',
+};
+
 /**
- * Cycles through CSE_KEY_POOL until a valid image URL is returned.
- * On 429 (quota exceeded) or any network error, rotates to the next key.
- * Throws only after every key in the pool has been tried.
+ * Obtain a DuckDuckGo vqd token required by the i.js image endpoint.
+ * @returns {Promise<string|null>}
+ */
+async function fetchDuckDuckGoVqd(query) {
+  try {
+    const url = `https://duckduckgo.com/?q=${encodeURIComponent(query)}`;
+    const res = await fetch(url, {
+      method: 'GET',
+      headers: {
+        ...DDG_HEADERS,
+        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      },
+    });
+
+    if (!res.ok) {
+      console.warn(`[Scan] DDG vqd page failed with status ${res.status}`);
+      return null;
+    }
+
+    const html = await res.text();
+    const patterns = [
+      /vqd=["']([^"']+)["']/i,
+      /vqd=([\d-]+)&/i,
+      /"vqd"\s*:\s*"([^"]+)"/i,
+    ];
+
+    for (const re of patterns) {
+      const match = html.match(re);
+      if (match && match[1]) return match[1];
+    }
+
+    console.warn('[Scan] DDG vqd token not found in response HTML');
+    return null;
+  } catch (err) {
+    console.warn('[Scan] DDG vqd fetch error:', err.message);
+    return null;
+  }
+}
+
+/**
+ * Fetch a product image via DuckDuckGo's free i.js image endpoint.
+ * Function name retained for call-site compatibility.
+ * Never throws — returns a live image URL string, or null on any failure.
  *
  * @param {string} productName — already normalised (trim + lowercase)
- * @returns {string} image URL
+ * @returns {Promise<string|null>}
  */
 async function fetchImageFromCSE(productName) {
-  if (!CSE_CX) throw new Error('GOOGLE_CSE_CX is not configured in .env');
-  if (CSE_KEY_POOL.length === 0) throw new Error('No IMAGE_KEY_* keys configured in .env');
+  try {
+    const query = `${productName} product packaging bottle`;
+    console.log(`[Scan] DuckDuckGo image lookup for: "${productName}"`);
 
-  let lastError;
+    const vqd = await fetchDuckDuckGoVqd(query);
+    if (!vqd) {
+      console.warn('[Scan] DuckDuckGo lookup failed, falling back safely — missing vqd');
+      return null;
+    }
 
-  for (let keyIndex = 0; keyIndex < CSE_KEY_POOL.length; keyIndex++) {
-    const apiKey = CSE_KEY_POOL[keyIndex];
-    const searchQuery = encodeURIComponent(`${productName} product`);
-    const url = `https://www.googleapis.com/customsearch/v1?key=${apiKey}&cx=${CSE_CX}&q=${searchQuery}&searchType=image&num=1`;
+    const ijsUrl =
+      `https://duckduckgo.com/i.js` +
+      `?l=us-en` +
+      `&o=json` +
+      `&q=${encodeURIComponent(query)}` +
+      `&vqd=${encodeURIComponent(vqd)}` +
+      `&f=,,,` +
+      `&p=1`;
 
-    try {
-      console.log(`[Scan] CSE image fetch attempt with key[${keyIndex + 1}/${CSE_KEY_POOL.length}] for: "${productName}"`);
+    const res = await fetch(ijsUrl, { method: 'GET', headers: DDG_HEADERS });
 
-      const res = await fetch(url);
+    if (!res.ok) {
+      console.warn(
+        `[Scan] DuckDuckGo lookup failed, falling back safely — i.js status ${res.status}`
+      );
+      return null;
+    }
 
-      if (res.status === 429) {
-        // Quota exceeded on this key — hot-swap to the next one
-        console.warn(`[Scan] CSE key[${keyIndex + 1}] hit 429 quota limit, rotating to next key...`);
-        lastError = new Error(`CSE key[${keyIndex + 1}] quota exceeded (429)`);
-        continue; // try next key
-      }
+    const data = await res.json().catch(() => null);
+    const results = Array.isArray(data?.results) ? data.results : [];
 
-      if (!res.ok) {
-        const errBody = await res.text();
-        throw new Error(`CSE API error ${res.status}: ${errBody}`);
-      }
-
-      const data = await res.json();
-      const imageUrl = data?.items?.[0]?.link;
-
-      if (!imageUrl) {
-        throw new Error(`CSE returned no image results for: "${productName}"`);
-      }
-
-      console.log(`[Scan] CSE image fetched successfully for: "${productName}"`);
-      return imageUrl;
-
-    } catch (err) {
-      // If error was not a quota rotation (already continued), record it
-      if (!err.message.includes('quota exceeded')) {
-        lastError = err;
-        console.error(`[Scan] CSE key[${keyIndex + 1}] error:`, err.message);
-        // For non-quota errors (network failures), also try next key
-        continue;
+    // Prefer full-size `image`, then thumbnail
+    for (const item of results) {
+      const candidate = item?.image || item?.thumbnail || item?.url;
+      if (typeof candidate === 'string' && /^https?:\/\//i.test(candidate)) {
+        console.log(`[Scan] DuckDuckGo image fetched successfully for: "${productName}"`);
+        return candidate;
       }
     }
-  }
 
-  // All keys exhausted
-  throw lastError || new Error('All CSE API keys failed');
+    console.warn(
+      `[Scan] DuckDuckGo lookup failed, falling back safely — no image results for: "${productName}"`
+    );
+    return null;
+  } catch (err) {
+    console.warn('[Scan] DuckDuckGo lookup failed, falling back safely:', err.message);
+    return null;
+  }
+}
+
+/**
+ * Persist product image (real or fallback) to MongoDB cache.
+ * Always runs — never skips the DB write pipeline.
+ */
+async function persistProductImageCache(productKey, imageUrl) {
+  try {
+    await CachedProduct.findOneAndUpdate(
+      { productName: productKey },
+      { productName: productKey, imageUrl },
+      { upsert: true, new: true }
+    );
+    console.log(`[Scan] Cached image for: "${productKey}" → ${imageUrl}`);
+    return true;
+  } catch (writeErr) {
+    console.warn('[Scan] MongoDB cache write failed (non-fatal):', writeErr.message);
+    return false;
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -103,11 +197,11 @@ async function fetchImageFromCSE(productName) {
 //  Response: { success: true, imageUrl: string, fromCache: boolean }
 //
 //  Flow:
-//    1. Check MongoDB TTL cache → return immediately if hit
-//    2. Check inflightRequests Map → await existing promise if pending (dedup)
-//    3. Fire Google CSE fetch with automatic key rotation on 429
-//    4. Write successful result to MongoDB cache
-//    5. Return fallback image if all keys exhausted
+//    1. Check MongoDB cache — dummy fallback paths count as CACHE MISS
+//    2. Dedup inflight requests for the same product
+//    3. Sequential DuckDuckGo fetch (1000ms gap between products)
+//    4. Assign FALLBACK_IMAGE when DDG returns null
+//    5. ALWAYS overwrite MongoDB with the resolved imageUrl
 // ─────────────────────────────────────────────────────────────────────────────
 router.post('/product-image', async (req, res) => {
   try {
@@ -120,13 +214,12 @@ router.post('/product-image', async (req, res) => {
       });
     }
 
-    // Normalise: always trim + lowercase for consistent cache keys
     const productKey = productName.trim().toLowerCase();
 
-    // ── Layer 1: MongoDB Cache Hit ────────────────────────────────────────────
+    // ── Layer 1: MongoDB Cache Hit (dummy fallback = CACHE MISS) ─────────────
     try {
       const cached = await CachedProduct.findOne({ productName: productKey }).lean();
-      if (cached) {
+      if (cached && cached.imageUrl && !isDummyCachedImage(cached.imageUrl)) {
         console.log(`[Scan] Cache HIT for: "${productKey}"`);
         return res.status(200).json({
           success: true,
@@ -134,8 +227,12 @@ router.post('/product-image', async (req, res) => {
           fromCache: true,
         });
       }
+      if (cached && isDummyCachedImage(cached.imageUrl)) {
+        console.log(
+          `[Scan] Cache MISS (dummy fallback) for: "${productKey}" — re-fetching from DuckDuckGo`
+        );
+      }
     } catch (cacheErr) {
-      // Cache read failure is non-fatal — proceed to CSE fetch
       console.warn('[Scan] MongoDB cache read failed (non-fatal):', cacheErr.message);
     }
 
@@ -143,10 +240,9 @@ router.post('/product-image', async (req, res) => {
     if (inflightRequests.has(productKey)) {
       console.log(`[Scan] Dedup lock HIT — awaiting existing promise for: "${productKey}"`);
       try {
-        const imageUrl = await inflightRequests.get(productKey);
+        const imageUrl = (await inflightRequests.get(productKey)) || FALLBACK_IMAGE;
         return res.status(200).json({ success: true, imageUrl, fromCache: false });
       } catch {
-        // The existing inflight request also failed — fall through to fallback
         return res.status(200).json({
           success: true,
           imageUrl: FALLBACK_IMAGE,
@@ -155,40 +251,33 @@ router.post('/product-image', async (req, res) => {
       }
     }
 
-    // ── Layer 3: CSE Fetch — register promise in lock BEFORE firing request ────
-    let resolveInflight, rejectInflight;
-    const inflightPromise = new Promise((resolve, reject) => {
+    // ── Layer 3: Sequential DuckDuckGo fetch ──────────────────────────────────
+    let resolveInflight = () => {};
+    const inflightPromise = new Promise((resolve) => {
       resolveInflight = resolve;
-      rejectInflight = reject;
     });
     inflightRequests.set(productKey, inflightPromise);
 
     let imageUrl = FALLBACK_IMAGE;
     try {
-      imageUrl = await fetchImageFromCSE(productKey);
+      const ddgResult = await enqueueSequentialImageFetch(() => fetchImageFromCSE(productKey));
 
-      // ── Layer 4: Write to MongoDB Cache ────────────────────────────────────
-      try {
-        await CachedProduct.findOneAndUpdate(
-          { productName: productKey },
-          { productName: productKey, imageUrl },
-          { upsert: true, new: true }
-        );
-        console.log(`[Scan] Cached image for: "${productKey}"`);
-      } catch (writeErr) {
-        // Cache write failure is non-fatal — still return the image
-        console.warn('[Scan] MongoDB cache write failed (non-fatal):', writeErr.message);
+      if (!ddgResult || isDummyCachedImage(ddgResult)) {
+        imageUrl = FALLBACK_IMAGE;
+        console.log(`[Scan] Using fallback image for: "${productKey}" → ${FALLBACK_IMAGE}`);
+      } else {
+        imageUrl = ddgResult;
       }
 
+      // ── Layer 4: ALWAYS overwrite MongoDB (live URL or fallback) ────────────
+      await persistProductImageCache(productKey, imageUrl);
       resolveInflight(imageUrl);
-    } catch (fetchErr) {
-      // ── All CSE keys exhausted — use fallback ───────────────────────────────
-      console.error(`[Scan] All CSE keys failed for: "${productKey}" →`, fetchErr.message);
-      console.log(`[Scan] Using fallback image: ${FALLBACK_IMAGE}`);
+    } catch (unexpectedErr) {
+      console.warn('[Scan] DuckDuckGo lookup failed, falling back safely:', unexpectedErr.message);
       imageUrl = FALLBACK_IMAGE;
-      rejectInflight(fetchErr); // signal waiting duplicates to also use fallback
+      await persistProductImageCache(productKey, imageUrl);
+      resolveInflight(imageUrl);
     } finally {
-      // CRITICAL: Always clear the lock — prevents Map memory leak
       inflightRequests.delete(productKey);
     }
 
@@ -197,10 +286,9 @@ router.post('/product-image', async (req, res) => {
       imageUrl,
       fromCache: false,
     });
-
   } catch (err) {
-    // Outer catch — this should never trigger, but guarantees crash safety
     console.error('[Scan ProductImage Error]', err);
+    // Never hard-crash — JSON text / scan pipeline continues with fallback
     return res.status(200).json({
       success: true,
       imageUrl: FALLBACK_IMAGE,
@@ -210,18 +298,19 @@ router.post('/product-image', async (req, res) => {
 });
 
 // ── POST /api/scan/save ──────────────────────────────────────────────────────
-// Saves a scan result and updates the user's streak counter.
-// Requires: Authorization: Bearer <token>
-// Body: { concern_category, ai_full_json_result, scan_image_url? }
 router.post('/save', protect, async (req, res) => {
   try {
-    const { concern_category, ai_full_json_result = {}, scan_image_url = null } = req.body;
+    const { concern_category, ai_full_json_result = {} } = req.body;
+    let { scan_image_url = null } = req.body;
 
     if (!concern_category) {
       return res.status(400).json({ success: false, message: 'concern_category is required.' });
     }
 
-    // Persist the scan result
+    if (!scan_image_url || typeof scan_image_url !== 'string' || !scan_image_url.trim()) {
+      scan_image_url = FALLBACK_IMAGE;
+    }
+
     const scanResult = await ScanResult.create({
       userId: req.userId,
       concern_category,
@@ -229,12 +318,7 @@ router.post('/save', protect, async (req, res) => {
       scan_image_url,
     });
 
-    // ── Streak Logic ──────────────────────────────────────────────────────
-    // Compare today's date (YYYY-MM-DD) to last_scan_date on the user doc.
-    // - Same day  → no change (already counted)
-    // - Yesterday → streak_count += 1
-    // - Older     → streak_count resets to 1
-    const today = new Date().toISOString().slice(0, 10); // "2026-07-16"
+    const today = new Date().toISOString().slice(0, 10);
     const user = await User.findById(req.userId).select('streak_count last_scan_date');
 
     if (user && user.last_scan_date !== today) {
@@ -257,6 +341,7 @@ router.post('/save', protect, async (req, res) => {
       data: {
         id: scanResult._id,
         concern_category: scanResult.concern_category,
+        scan_image_url: scanResult.scan_image_url,
         created_at: scanResult.createdAt,
       },
     });
@@ -267,8 +352,6 @@ router.post('/save', protect, async (req, res) => {
 });
 
 // ── GET /api/scan/history ────────────────────────────────────────────────────
-// Returns the last 20 scan results for the authenticated user.
-// Requires: Authorization: Bearer <token>
 router.get('/history', protect, async (req, res) => {
   try {
     const scans = await ScanResult.find({ userId: req.userId })
@@ -277,7 +360,6 @@ router.get('/history', protect, async (req, res) => {
       .select('concern_category createdAt ai_full_json_result scan_image_url')
       .lean();
 
-    // Also grab the current streak count
     const user = await User.findById(req.userId).select('streak_count').lean();
 
     return res.status(200).json({
