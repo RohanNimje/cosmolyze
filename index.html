@@ -612,49 +612,44 @@
                     <div
                         class="font-label-caps text-label-caps text-on-surface-variant mb-md relative z-10 tracking-widest uppercase">
                         Scan Your Skin</div>
-
-                    <!-- Face scan tracker — inline SVG (no local asset dependency) -->
+                    <!-- Face scan tracker — Pixel-Perfect Integrated Mesh -->
                     <div
-                        class="relative w-48 h-64 border-2 border-primary/20 dark:border-primary-fixed/20 rounded-xl flex items-center justify-center mb-md bg-surface-container-lowest dark:bg-surface-container overflow-hidden shadow-inner">
-                        <!-- Scan line animation -->
+                        class="relative w-48 h-64 rounded-xl mb-md overflow-hidden bg-[#b9cfc8] dark:bg-[#1a2e29] border border-primary/10 shadow-inner">
+
+                        <!-- 1. The Core Asset (Set as absolute background to blend natively) -->
+                        <img src="https://res.cloudinary.com/doyiqcna9/image/upload/v1784396082/biometric-face-scan_cnpg0f.png"
+                            alt="Cosmolyze AI Clinical Biometric Face Scan"
+                            class="absolute inset-0 w-full h-full object-cover z-0 opacity-95 dark:opacity-90 contrast-105"
+                            loading="eager" />
+
+                        <!-- 2. Dark Vignette Overlay (Gives depth so it doesn't look pasted on top) -->
+                        <div
+                            class="absolute inset-0 z-[5] bg-gradient-to-t from-black/20 via-transparent to-black/10 pointer-events-none">
+                        </div>
+
+                        <!-- 3. Existing Scan Line Animation Layer (Floats precisely above the graphics) -->
                         <div class="absolute inset-0 z-10 pointer-events-none overflow-hidden rounded-xl">
                             <div class="mesh-line"></div>
-
-                            <!-- Flexbox/Grid Dynamic Responsive Container -->
-                            <div
-                                class="relative w-full aspect-[3/4] sm:aspect-[2/3] max-w-[220px] mx-auto border-2 border-primary/20 dark:border-primary-fixed/20 rounded-xl overflow-hidden shadow-inner bg-surface-container-lowest flex items-center justify-center mb-md">
-
-                                <!-- Dynamic Self-Adjusting Production Image -->
-                                <img src="https://res.cloudinary.com/doyiqcna9/image/upload/v1784396082/biometric-face-scan_cnpg0f.png"
-                                    alt="Cosmolyze AI Clinical Biometric Face Scan"
-                                    class="absolute inset-0 w-full h-full object-cover pointer-events-none"
-                                    loading="eager" />
-
-                                <!-- Scan line animation layer (Floats precisely on top) -->
-                                <div class="absolute inset-0 z-10 pointer-events-none overflow-hidden rounded-xl">
-                                    <div class="mesh-line"></div>
-                                </div>
-                            </div>
-
-                        </div>
-
-                        <!-- CTA Buttons -->
-                        <div class="w-full space-y-xs relative z-10">
-                            <button
-                                class="w-full bg-primary text-on-primary py-3.5 rounded-lg font-label-caps text-label-caps hover:opacity-90 transition-all shadow-md active:scale-95 flex items-center justify-center gap-2"
-                                id="btn-take-photo" onclick="triggerCamera()">
-                                <span class="material-symbols-outlined" data-icon="photo_camera"
-                                    style="font-size: 18px;">photo_camera</span> Take Photo
-                            </button>
-                            <button
-                                class="w-full border-2 border-primary/70 text-primary dark:border-primary-fixed/70 dark:text-primary-fixed py-3.5 rounded-lg font-label-caps text-label-caps hover:bg-primary/5 dark:hover:bg-primary-fixed/5 transition-all active:scale-95 flex items-center justify-center gap-2"
-                                id="btn-choose-gallery" onclick="triggerGallery()">
-                                <span class="material-symbols-outlined" data-icon="collections"
-                                    style="font-size: 18px;">collections</span> Choose Gallery
-                            </button>
                         </div>
                     </div>
+
+                    <!-- CTA Buttons -->
+                    <div class="w-full space-y-xs relative z-10">
+                        <button
+                            class="w-full bg-primary text-on-primary py-3.5 rounded-lg font-label-caps text-label-caps hover:opacity-90 transition-all shadow-md active:scale-95 flex items-center justify-center gap-2"
+                            id="btn-take-photo" onclick="triggerCamera()">
+                            <span class="material-symbols-outlined" data-icon="photo_camera"
+                                style="font-size: 18px;">photo_camera</span> Take Photo
+                        </button>
+                        <button
+                            class="w-full border-2 border-primary/70 text-primary dark:border-primary-fixed/70 dark:text-primary-fixed py-3.5 rounded-lg font-label-caps text-label-caps hover:bg-primary/5 dark:hover:bg-primary-fixed/5 transition-all active:scale-95 flex items-center justify-center gap-2"
+                            id="btn-choose-gallery" onclick="triggerGallery()">
+                            <span class="material-symbols-outlined" data-icon="collections"
+                                style="font-size: 18px;">collections</span> Choose Gallery
+                        </button>
+                    </div>
                 </div>
+            </div>
         </section>
 
         <!-- ══════════════════════════════════════════════════════════════
