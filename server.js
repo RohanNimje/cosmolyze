@@ -21,6 +21,10 @@ app.use(cors());
 app.use(express.json({ limit: '10mb' })); // 10mb to handle base64 image payloads
 app.use(express.static(path.join(__dirname))); // serve index.html + assets
 
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'index.html'));
+});
+
 // ── API Routes ──────────────────────────────────────────────────────────────
 app.get('/api', (req, res) => {
   res.json({ success: true, message: '🚀 Cosmolyze API is running.' });
@@ -68,7 +72,7 @@ mongoose
     console.log('✅ Connected to MongoDB');
     app.listen(PORT, () => {
       console.log(`🌐 Server listening on http://localhost:${PORT}`);
-      console.log(`📄 Frontend: http://localhost:${PORT}/index.html`);
+      console.log(`📄 Frontend: http://localhost:${PORT}/`);
       console.log(`🔗 API Base: http://localhost:${PORT}/api`);
     });
   })
