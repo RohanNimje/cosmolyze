@@ -1695,21 +1695,10 @@
             }
         }
 
-        // ── API Configuration (synced with PORT in .env → 5000) ──────────────
-        const API_PORT = 5000;
-        const API_BASE = (() => {
-            // Prefer same-origin /api when the SPA is served by Express on PORT
-            try {
-                if (location.protocol.startsWith('http') &&
-                    (location.port === String(API_PORT) ||
-                        (location.port === '' && location.hostname === 'localhost'))) {
-                    return `${location.origin}/api`;
-                }
-            } catch (_) { /* file:// or restricted context */ }
-            return `http://localhost:${API_PORT}/api`;
-        })();
+        // ── API Configuration ──────────────
+        const API_BASE = '/api';
         const API_URL = API_BASE + '/auth'; // kept for backward compat
-        const SERVER_ERROR_MSG = `Cannot connect to server. Please ensure backend is running on port ${API_PORT}.`;
+        const SERVER_ERROR_MSG = `Cannot connect to server. Please ensure backend is running.`;
         const FALLBACK_PRODUCT_IMAGE = '/images/default-clinical-bottle.png';
 
         // Inline bookmark icon (no icon-font dependency — always visible)
