@@ -54,6 +54,63 @@ function enqueueSequentialImageFetch(taskFn) {
 // ── Fallback image when DuckDuckGo returns nothing usable ────────────────────
 const FALLBACK_IMAGE = '/images/default-clinical-bottle.png';
 
+/** Answer strings that were mistakenly saved as card titles */
+const JUNK_SCAN_TITLES = new Set([
+  'yes, clearly visible',
+  'yes clearly visible',
+  'no',
+  'somewhat',
+  'barely noticeable',
+  'not sure',
+  'no specific preference',
+  'minimal routine',
+  'none known',
+  'general analysis',
+]);
+
+/**
+ * Derive a clean dashboard card title from AI analysis + stored category.
+ * Never uses raw questionnaire answers like "Yes, clearly visible".
+ */
+function resolveScanDisplayTitle(rawTitle, aiResult = {}) {
+  const blob = [
+    rawTitle,
+    ...(Array.isArray(aiResult.detected_concerns) ? aiResult.detected_concerns : []),
+    aiResult.top_winner?.product_name,
+    aiResult.top_winner?.what_it_is,
+    aiResult.top_winner?.expert_verdict,
+    ...(Array.isArray(aiResult.top_winner?.key_benefits) ? aiResult.top_winner.key_benefits : []),
+    ...(Array.isArray(aiResult.top_winner?.key_actives) ? aiResult.top_winner.key_actives : []),
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+
+  if (/\b(acne|pimple|pimples|blemishes?|comedones?)\b/.test(blob)) {
+    return 'Acne & Pimple Analysis';
+  }
+  if (/\b(texture|rough|pores?|uneven)\b/.test(blob)) {
+    return 'Skin Texture Report';
+  }
+
+  const trimmed = String(rawTitle || '').trim();
+  const normalized = trimmed.toLowerCase();
+
+  // Legacy junk titles → clean clinical default
+  if (!trimmed || JUNK_SCAN_TITLES.has(normalized) || /^(yes|no)\b/i.test(trimmed)) {
+    return 'Clinical Skin Analysis';
+  }
+
+  // Keep already-good clinical titles
+  if (/acne|pimple/i.test(trimmed)) return 'Acne & Pimple Analysis';
+  if (/texture/i.test(trimmed)) return 'Skin Texture Report';
+  if (/clinical|skin|analysis|report|hyperpigmentation|dryness|aging|blemish/i.test(trimmed)) {
+    return trimmed;
+  }
+
+  return 'Clinical Skin Analysis';
+}
+
 /** Dummy/local fallback paths are treated as CACHE MISS so we re-fetch live URLs. */
 function isDummyCachedImage(imageUrl) {
   if (!imageUrl || typeof imageUrl !== 'string') return true;
@@ -181,7 +238,7 @@ async function persistProductImageCache(productKey, imageUrl) {
     await CachedProduct.findOneAndUpdate(
       { productName: productKey },
       { productName: productKey, imageUrl },
-      { upsert: true, new: true }
+      { upsert: true, returnDocument: 'after' }
     );
     console.log(`[Scan] Cached image for: "${productKey}" → ${imageUrl}`);
     return true;
@@ -252,7 +309,7 @@ router.post('/product-image', async (req, res) => {
     }
 
     // ── Layer 3: Sequential DuckDuckGo fetch ──────────────────────────────────
-    let resolveInflight = () => {};
+    let resolveInflight = () => { };
     const inflightPromise = new Promise((resolve) => {
       resolveInflight = resolve;
     });
@@ -300,12 +357,15 @@ router.post('/product-image', async (req, res) => {
 // ── POST /api/scan/save ──────────────────────────────────────────────────────
 router.post('/save', protect, async (req, res) => {
   try {
-    const { concern_category, ai_full_json_result = {} } = req.body;
-    let { scan_image_url = null } = req.body;
+    const { ai_full_json_result = {} } = req.body;
+    let { concern_category, scan_image_url = null } = req.body;
 
     if (!concern_category) {
       return res.status(400).json({ success: false, message: 'concern_category is required.' });
     }
+
+    // Prefer AI-derived clinical title over raw questionnaire answers
+    concern_category = resolveScanDisplayTitle(concern_category, ai_full_json_result);
 
     if (!scan_image_url || typeof scan_image_url !== 'string' || !scan_image_url.trim()) {
       scan_image_url = FALLBACK_IMAGE;
@@ -360,12 +420,18 @@ router.get('/history', protect, async (req, res) => {
       .select('concern_category createdAt ai_full_json_result scan_image_url')
       .lean();
 
+    // On-the-fly title cleanup for legacy junk titles ("Yes, clearly visible", "No", …)
+    const normalizedScans = scans.map((scan) => ({
+      ...scan,
+      concern_category: resolveScanDisplayTitle(scan.concern_category, scan.ai_full_json_result),
+    }));
+
     const user = await User.findById(req.userId).select('streak_count').lean();
 
     return res.status(200).json({
       success: true,
       data: {
-        scans,
+        scans: normalizedScans,
         streak_count: user ? user.streak_count : 0,
       },
     });

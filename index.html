@@ -305,90 +305,141 @@
 
         /* Outer rotating ring */
         @keyframes clinicalRing {
-            0%   { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
+            0% {
+                transform: rotate(0deg);
+            }
+
+            100% {
+                transform: rotate(360deg);
+            }
         }
+
         /* Inner counter-rotating ring for depth */
         @keyframes clinicalRingReverse {
-            0%   { transform: rotate(0deg); }
-            100% { transform: rotate(-360deg); }
+            0% {
+                transform: rotate(0deg);
+            }
+
+            100% {
+                transform: rotate(-360deg);
+            }
         }
+
         /* Radar sweep */
         @keyframes radarSweep {
-            0%   { transform: rotate(0deg); opacity: 0.9; }
-            100% { transform: rotate(360deg); opacity: 0.9; }
+            0% {
+                transform: rotate(0deg);
+                opacity: 0.9;
+            }
+
+            100% {
+                transform: rotate(360deg);
+                opacity: 0.9;
+            }
         }
+
         /* Core pulse */
         @keyframes corePulse {
-            0%, 100% { transform: scale(1);   opacity: 0.7; }
-            50%       { transform: scale(1.15); opacity: 1;   }
+
+            0%,
+            100% {
+                transform: scale(1);
+                opacity: 0.7;
+            }
+
+            50% {
+                transform: scale(1.15);
+                opacity: 1;
+            }
         }
+
         /* Text carousel fade-slide */
         @keyframes textCarouselIn {
-            from { opacity: 0; transform: translateY(8px); }
-            to   { opacity: 1; transform: translateY(0);   }
+            from {
+                opacity: 0;
+                transform: translateY(8px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
         }
+
         .clinical-scanner-text {
             animation: textCarouselIn 0.45s cubic-bezier(0.22, 1, 0.36, 1) both;
         }
+
         /* Skeleton shimmer bar */
         @keyframes shimmer {
-            0%   { background-position: -400px 0; }
-            100% { background-position:  400px 0; }
+            0% {
+                background-position: -400px 0;
+            }
+
+            100% {
+                background-position: 400px 0;
+            }
         }
+
         .skeleton-bar {
             background: linear-gradient(90deg,
-                rgba(0,52,43,0.06) 25%,
-                rgba(0,52,43,0.14) 50%,
-                rgba(0,52,43,0.06) 75%);
+                    rgba(0, 52, 43, 0.06) 25%,
+                    rgba(0, 52, 43, 0.14) 50%,
+                    rgba(0, 52, 43, 0.06) 75%);
             background-size: 800px 100%;
             animation: shimmer 1.6s infinite linear;
             border-radius: 6px;
         }
+
         .dark .skeleton-bar {
             background: linear-gradient(90deg,
-                rgba(148,211,193,0.07) 25%,
-                rgba(148,211,193,0.18) 50%,
-                rgba(148,211,193,0.07) 75%);
+                    rgba(148, 211, 193, 0.07) 25%,
+                    rgba(148, 211, 193, 0.18) 50%,
+                    rgba(148, 211, 193, 0.07) 75%);
             background-size: 800px 100%;
             animation: shimmer 1.6s infinite linear;
         }
 
         /* ── Premium product-image shimmer ─────────────────────────────────── */
         @keyframes shimmerSweep {
-            0%   { background-position: -200% 0; }
-            100% { background-position:  200% 0; }
+            0% {
+                background-position: -200% 0;
+            }
+
+            100% {
+                background-position: 200% 0;
+            }
         }
+
         .shimmer-loading {
             position: relative;
             overflow: hidden;
-            background: linear-gradient(
-                90deg,
-                #e8eeeb 0%,
-                #e8eeeb 35%,
-                #f5faf7 50%,
-                #e8eeeb 65%,
-                #e8eeeb 100%
-            );
+            background: linear-gradient(90deg,
+                    #e8eeeb 0%,
+                    #e8eeeb 35%,
+                    #f5faf7 50%,
+                    #e8eeeb 65%,
+                    #e8eeeb 100%);
             background-size: 200% 100%;
             animation: shimmerSweep 1.35s ease-in-out infinite;
         }
+
         .dark .shimmer-loading {
-            background: linear-gradient(
-                90deg,
-                #2a3330 0%,
-                #2a3330 35%,
-                #3a4843 50%,
-                #2a3330 65%,
-                #2a3330 100%
-            );
+            background: linear-gradient(90deg,
+                    #2a3330 0%,
+                    #2a3330 35%,
+                    #3a4843 50%,
+                    #2a3330 65%,
+                    #2a3330 100%);
             background-size: 200% 100%;
             animation: shimmerSweep 1.35s ease-in-out infinite;
         }
+
         .product-img-fade {
             opacity: 0;
             transition: opacity 0.45s ease;
         }
+
         .product-img-fade.is-loaded {
             opacity: 1;
         }
@@ -400,55 +451,69 @@
             height: 140px;
             flex-shrink: 0;
         }
+
         .clinical-scanner .ring-outer {
-            position: absolute; inset: 0;
+            position: absolute;
+            inset: 0;
             border-radius: 50%;
             border: 2px solid rgba(0, 52, 43, 0.15);
             border-top-color: rgba(0, 52, 43, 0.8);
             animation: clinicalRing 1.8s linear infinite;
         }
+
         .dark .clinical-scanner .ring-outer {
             border-color: rgba(148, 211, 193, 0.15);
             border-top-color: rgba(148, 211, 193, 0.85);
         }
+
         .clinical-scanner .ring-inner {
-            position: absolute; inset: 16px;
+            position: absolute;
+            inset: 16px;
             border-radius: 50%;
             border: 2px dashed rgba(0, 52, 43, 0.2);
             border-bottom-color: rgba(0, 52, 43, 0.6);
             animation: clinicalRingReverse 2.4s linear infinite;
         }
+
         .dark .clinical-scanner .ring-inner {
             border-color: rgba(148, 211, 193, 0.12);
             border-bottom-color: rgba(148, 211, 193, 0.55);
         }
+
         .clinical-scanner .radar-sweep {
-            position: absolute; inset: 28px;
+            position: absolute;
+            inset: 28px;
             border-radius: 50%;
-            background: conic-gradient(
-                rgba(0, 52, 43, 0.3) 0deg,
-                transparent 70deg
-            );
+            background: conic-gradient(rgba(0, 52, 43, 0.3) 0deg,
+                    transparent 70deg);
             animation: radarSweep 2s linear infinite;
         }
+
         .dark .clinical-scanner .radar-sweep {
-            background: conic-gradient(
-                rgba(148, 211, 193, 0.3) 0deg,
-                transparent 70deg
-            );
+            background: conic-gradient(rgba(148, 211, 193, 0.3) 0deg,
+                    transparent 70deg);
         }
+
         .clinical-scanner .core {
-            position: absolute; inset: 0;
-            display: flex; align-items: center; justify-content: center;
+            position: absolute;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
         }
+
         .clinical-scanner .core-dot {
-            width: 28px; height: 28px;
+            width: 28px;
+            height: 28px;
             border-radius: 50%;
             background: rgba(0, 52, 43, 0.12);
             border: 2px solid rgba(0, 52, 43, 0.4);
             animation: corePulse 2s ease-in-out infinite;
-            display: flex; align-items: center; justify-content: center;
+            display: flex;
+            align-items: center;
+            justify-content: center;
         }
+
         .dark .clinical-scanner .core-dot {
             background: rgba(148, 211, 193, 0.12);
             border-color: rgba(148, 211, 193, 0.5);
@@ -565,10 +630,10 @@
                             <path d="M36 118 Q40 168 80 186 Q120 168 124 118" stroke="#29695b" stroke-width="2.2"
                                 fill="none" stroke-linecap="round" />
                             <!-- Brow guides -->
-                            <path d="M52 78 Q66 70 80 78" stroke="#29695b" stroke-width="1.6" fill="none"
-                                opacity="0.7" stroke-linecap="round" />
-                            <path d="M80 78 Q94 70 108 78" stroke="#29695b" stroke-width="1.6" fill="none"
-                                opacity="0.7" stroke-linecap="round" />
+                            <path d="M52 78 Q66 70 80 78" stroke="#29695b" stroke-width="1.6" fill="none" opacity="0.7"
+                                stroke-linecap="round" />
+                            <path d="M80 78 Q94 70 108 78" stroke="#29695b" stroke-width="1.6" fill="none" opacity="0.7"
+                                stroke-linecap="round" />
                             <!-- Eye markers -->
                             <circle cx="64" cy="96" r="4" fill="#29695b" opacity="0.55" />
                             <circle cx="96" cy="96" r="4" fill="#29695b" opacity="0.55" />
@@ -718,8 +783,16 @@
             id="state-diagnosis">
             <div class="w-full max-w-2xl mt-8">
                 <div class="mb-8 flex justify-between items-center text-sm font-label-caps text-on-surface-variant">
-                    <span id="diagnosis-step-indicator">Step 1 of 5</span>
-                    <div class="flex gap-1 h-2">
+                    <div class="flex items-center gap-3 min-w-0">
+                        <button type="button" id="diagnosis-back-btn" onclick="prevDiagnosisStep()"
+                            class="hidden inline-flex items-center gap-1 text-on-surface-variant hover:text-primary dark:hover:text-primary-fixed transition-colors font-label-caps text-xs tracking-wide px-1 py-1 rounded"
+                            aria-label="Go back to previous question">
+                            <span class="material-symbols-outlined" style="font-size:18px;">arrow_back</span>
+                            Back
+                        </button>
+                        <span id="diagnosis-step-indicator">Step 1 of 5</span>
+                    </div>
+                    <div class="flex gap-1 h-2 flex-shrink-0">
                         <div class="w-8 bg-primary rounded-full transition-all" id="prog-1"></div>
                         <div class="w-8 bg-surface-container-high rounded-full transition-all" id="prog-2"></div>
                         <div class="w-8 bg-surface-container-high rounded-full transition-all" id="prog-3"></div>
@@ -890,13 +963,15 @@
                     <div class="radar-sweep"></div>
                     <div class="core">
                         <div class="core-dot">
-                            <span class="material-symbols-outlined text-primary dark:text-primary-fixed" style="font-size:13px;font-variation-settings:'FILL' 1;">biotech</span>
+                            <span class="material-symbols-outlined text-primary dark:text-primary-fixed"
+                                style="font-size:13px;font-variation-settings:'FILL' 1;">biotech</span>
                         </div>
                     </div>
                 </div>
                 <!-- Cycling text -->
                 <div class="text-center max-w-xs">
-                    <p class="font-headline-md text-on-surface mb-1 clinical-scanner-text" id="results-loading-text">Scanning facial topography...</p>
+                    <p class="font-headline-md text-on-surface mb-1 clinical-scanner-text" id="results-loading-text">
+                        Scanning facial topography...</p>
                     <p class="font-body-sm text-on-surface-variant">Dr. Cosmolyze is building your clinical profile.</p>
                 </div>
                 <!-- Skeleton shimmer bars (mimic loading content) -->
@@ -994,13 +1069,16 @@
                         <div class="radar-sweep"></div>
                         <div class="core">
                             <div class="core-dot">
-                                <span class="material-symbols-outlined text-primary dark:text-primary-fixed" style="font-size:13px;font-variation-settings:'FILL' 1;">science</span>
+                                <span class="material-symbols-outlined text-primary dark:text-primary-fixed"
+                                    style="font-size:13px;font-variation-settings:'FILL' 1;">science</span>
                             </div>
                         </div>
                     </div>
                     <div class="text-center max-w-xs">
-                        <p class="font-headline-md text-on-surface mb-1 clinical-scanner-text" id="formula-loading-text">Scanning formula composition...</p>
-                        <p class="font-body-sm text-on-surface-variant text-center">Dr. Cosmolyze is auditing every ingredient for clinical safety and efficacy.</p>
+                        <p class="font-headline-md text-on-surface mb-1 clinical-scanner-text"
+                            id="formula-loading-text">Scanning formula composition...</p>
+                        <p class="font-body-sm text-on-surface-variant text-center">Dr. Cosmolyze is auditing every
+                            ingredient for clinical safety and efficacy.</p>
                     </div>
                     <div class="w-full max-w-xs space-y-3">
                         <div class="skeleton-bar h-3 w-full"></div>
@@ -1545,6 +1623,8 @@
     <input type="file" id="camera-input" accept="image/*" capture="environment" style="display:none;" />
     <input type="file" id="gallery-input" accept="image/*" style="display:none;" />
 
+    <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
+
     <script>
         // ═══════════════════════════════════════════════════════════════════════
         //  COSMOLYZE — COMPLETE PRODUCTION SCRIPT (Clean & Fixed)
@@ -1926,6 +2006,116 @@
         });
 
         // ── Smart Flow & Camera/Gallery ──
+        // face-api.js tinyFaceDetector — loaded once on mount (CDN weights)
+        const FACE_API_WEIGHTS_URL =
+            'https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@0.22.2/weights';
+        let faceApiLoadPromise = null;
+
+        function ensureFaceApiLoaded() {
+            if (typeof faceapi === 'undefined') {
+                return Promise.reject(new Error('face-api.js not available'));
+            }
+            if (!faceApiLoadPromise) {
+                faceApiLoadPromise = faceapi.nets.tinyFaceDetector
+                    .loadFromUri(FACE_API_WEIGHTS_URL)
+                    .then(() => {
+                        console.log('[FaceAPI] tinyFaceDetector ready');
+                        return true;
+                    })
+                    .catch((err) => {
+                        faceApiLoadPromise = null;
+                        throw err;
+                    });
+            }
+            return faceApiLoadPromise;
+        }
+
+        // Preload model as soon as the script is interactive
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', () => {
+                ensureFaceApiLoaded().catch((err) =>
+                    console.warn('[FaceAPI] preload deferred:', err.message)
+                );
+            });
+        } else {
+            ensureFaceApiLoaded().catch((err) =>
+                console.warn('[FaceAPI] preload deferred:', err.message)
+            );
+        }
+
+        function loadImageElement(src) {
+            return new Promise((resolve, reject) => {
+                const img = new Image();
+                img.onload = () => resolve(img);
+                img.onerror = () => reject(new Error('Failed to decode image'));
+                img.src = src;
+            });
+        }
+
+        /**
+         * Smart padded face crop → 512×512 JPEG (q=0.8).
+         * Face found: 20% padding on all sides, clamped, stretched to 512².
+         * No face / detector fail: letterbox entire image on black 512² (no crash).
+         */
+        async function prepareOptimizedFacePayload(dataUrl) {
+            const img = await loadImageElement(dataUrl);
+            const W = img.naturalWidth || img.width;
+            const H = img.naturalHeight || img.height;
+
+            const canvas = document.createElement('canvas');
+            canvas.width = 512;
+            canvas.height = 512;
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = '#000000';
+            ctx.fillRect(0, 0, 512, 512);
+
+            let detection = null;
+            try {
+                await ensureFaceApiLoaded();
+                detection = await faceapi.detectSingleFace(
+                    img,
+                    new faceapi.TinyFaceDetectorOptions({
+                        inputSize: 416,
+                        scoreThreshold: 0.4,
+                    })
+                );
+            } catch (err) {
+                console.warn('[FaceAPI] detection skipped (fallback letterbox):', err.message);
+                detection = null;
+            }
+
+            if (detection && detection.box) {
+                const { x, y, width, height } = detection.box;
+                const padX = width * 0.2;
+                const padY = height * 0.2;
+
+                let sx = x - padX;
+                let sy = y - padY;
+                let sw = width + padX * 2;
+                let sh = height + padY * 2;
+
+                // Clamp padded box to natural image bounds
+                sx = Math.max(0, sx);
+                sy = Math.max(0, sy);
+                sw = Math.max(1, Math.min(sw, W - sx));
+                sh = Math.max(1, Math.min(sh, H - sy));
+
+                ctx.drawImage(img, sx, sy, sw, sh, 0, 0, 512, 512);
+                console.log('[FaceAPI] padded face crop → 512×512');
+            } else {
+                // Close-up / no full face: letterbox entire image (preserve skin detail)
+                const scale = Math.min(512 / W, 512 / H);
+                const dw = W * scale;
+                const dh = H * scale;
+                const dx = (512 - dw) / 2;
+                const dy = (512 - dh) / 2;
+                ctx.drawImage(img, 0, 0, W, H, dx, dy, dw, dh);
+                console.log('[FaceAPI] letterbox fallback → 512×512');
+            }
+
+            return canvas.toDataURL('image/jpeg', 0.8);
+        }
+
         function triggerCamera() {
             if (localStorage.getItem('token')) {
                 document.getElementById('camera-input').click();
@@ -1951,10 +2141,13 @@
             }
             const reader = new FileReader();
             reader.onload = e => {
-                // Store base64 for AI pipeline
+                // Store original for preview; Stage 1 optimizes before upload
+                questionnaireData.originalImageBase64 = e.target.result;
                 questionnaireData.imageBase64 = e.target.result;
-                // Reset previous answers
+                questionnaireData.faceReport = null;
                 questionnaireData.answers = ['', '', '', ''];
+                questionnaireData.detected_concerns = [];
+                currentDiagnosisStep = 1;
 
                 const img = document.getElementById('preview-scan-img');
                 if (img) img.src = e.target.result;
@@ -1987,34 +2180,63 @@
         //  MULTIMODAL AI ENGINE
         // ══════════════════════════════════════════════════════════════════════
 
-        // Global questionnaire state — collects all data before sending to Gemini
+        // Global questionnaire state — collects all data before Stage 2 (text-only)
         const questionnaireData = {
-            imageBase64: null,
-            questions: ['', '', '', ''],   // AI-generated question strings
-            answers: ['', '', '', ''],   // user's 4 answers
+            originalImageBase64: null,
+            imageBase64: null,       // optimized 512×512 JPEG for Stage 1 only
+            faceReport: null,        // full Stage 1 clinical JSON for Stage 2
+            questions: ['', '', '', ''],
+            answers: ['', '', '', ''],
+            detected_concerns: [],
             budgetMin: 300,
             budgetMax: 1500,
         };
+        let currentDiagnosisStep = 1;
 
-        // ── Step 1: Confirm image → call analyze-face → inject questions ─────
+        /** Build a clean dashboard card title from AI concerns (not raw answers). */
+        function deriveScanTitle(aiData = {}) {
+            const blob = [
+                ...(questionnaireData.detected_concerns || []),
+                ...(aiData.detected_concerns || []),
+                aiData.top_winner?.product_name,
+                aiData.top_winner?.what_it_is,
+                aiData.top_winner?.expert_verdict,
+                ...(aiData.top_winner?.key_benefits || []),
+            ].filter(Boolean).join(' ').toLowerCase();
+
+            if (/\b(acne|pimple|pimples|blemishes?|comedones?)\b/.test(blob)) {
+                return 'Acne & Pimple Analysis';
+            }
+            if (/\b(texture|rough|pores?|uneven)\b/.test(blob)) {
+                return 'Skin Texture Report';
+            }
+            return 'Clinical Skin Analysis';
+        }
+
+        // ── Step 1: Confirm image → smart crop → analyze-face → inject questions
         async function startFaceAnalysis() {
-            if (!questionnaireData.imageBase64) {
+            const sourceImage =
+                questionnaireData.originalImageBase64 || questionnaireData.imageBase64;
+            if (!sourceImage) {
                 showToast('No image captured. Please take or upload a photo first.', 'error');
                 return;
             }
 
-            // Show loading banner in diagnosis view
             const loadingBanner = document.getElementById('ai-question-loading');
             const loaderText = document.getElementById('loader-text');
-            if (loaderText) loaderText.innerText = 'Analysing your skin...';
+            if (loaderText) loaderText.innerText = 'Analyzing facial structure...';
             modalOverlay.classList.remove('hidden');
             loaderModal.classList.remove('hidden');
 
             try {
+                // Smart padded crop (or letterbox fallback) → 512×512 JPEG @ 0.8
+                const optimizedBase64 = await prepareOptimizedFacePayload(sourceImage);
+                questionnaireData.imageBase64 = optimizedBase64;
+
                 const res = await fetch(`${API_BASE}/ai/analyze-face`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ imageBase64: questionnaireData.imageBase64 }),
+                    body: JSON.stringify({ imageBase64: optimizedBase64 }),
                 });
 
                 closeModal();
@@ -2024,13 +2246,15 @@
                     throw new Error(json.message || 'Face analysis failed.');
                 }
 
+                // Persist full Stage 1 clinical report for Stage 2 (no image later)
+                questionnaireData.faceReport = json.data || {};
                 const { questions, detected_concerns } = json.data;
                 questionnaireData.questions = questions;
+                questionnaireData.detected_concerns = Array.isArray(detected_concerns)
+                    ? detected_concerns
+                    : [];
 
-                // Inject AI questions into each step
                 injectAIQuestions(questions);
-
-                // Switch to diagnosis view
                 resetDiagnosisState();
                 switchView('state-diagnosis');
                 if (loadingBanner) loadingBanner.classList.add('hidden');
@@ -2049,7 +2273,6 @@
                         : `Skin analysis failed: ${err.message}`,
                     'error'
                 );
-                // Fallback: load diagnosis with generic questions so user isn't blocked
                 injectFallbackQuestions();
                 resetDiagnosisState();
                 switchView('state-diagnosis');
@@ -2117,6 +2340,7 @@
         }
 
         function resetDiagnosisState() {
+            currentDiagnosisStep = 1;
             document.querySelectorAll('.step-card').forEach(c => c.classList.add('hidden'));
             const step1 = document.getElementById('step-1');
             if (step1) step1.classList.remove('hidden');
@@ -2128,6 +2352,51 @@
             }
             const p1 = document.getElementById('prog-1');
             if (p1) { p1.classList.add('bg-primary'); p1.classList.remove('bg-surface-container-high'); }
+            updateDiagnosisBackButton();
+        }
+
+        function updateDiagnosisBackButton() {
+            const backBtn = document.getElementById('diagnosis-back-btn');
+            if (!backBtn) return;
+            if (currentDiagnosisStep > 1) backBtn.classList.remove('hidden');
+            else backBtn.classList.add('hidden');
+        }
+
+        function goToDiagnosisStep(step) {
+            if (step < 1 || step > 5) return;
+            currentDiagnosisStep = step;
+            document.querySelectorAll('.step-card').forEach(c => c.classList.add('hidden'));
+            const card = document.getElementById('step-' + step);
+            if (card) card.classList.remove('hidden');
+            const indicator = document.getElementById('diagnosis-step-indicator');
+            if (indicator) indicator.innerText = 'Step ' + step + ' of 5';
+            for (let i = 1; i <= 5; i++) {
+                const p = document.getElementById('prog-' + i);
+                if (!p) continue;
+                if (i <= step) {
+                    p.classList.remove('bg-surface-container-high');
+                    p.classList.add('bg-primary');
+                } else {
+                    p.classList.remove('bg-primary');
+                    p.classList.add('bg-surface-container-high');
+                }
+            }
+            // Restore selected option highlight for answered steps
+            if (step >= 1 && step <= 4) {
+                const answer = questionnaireData.answers[step - 1];
+                const optsEl = document.getElementById(`step-${step}-options`);
+                if (optsEl && answer) {
+                    optsEl.querySelectorAll('.step-option-btn').forEach(b => {
+                        if (b.textContent === answer) {
+                            b.classList.add('border-primary', 'bg-primary/5');
+                        } else {
+                            b.classList.remove('border-primary', 'bg-primary/5');
+                        }
+                    });
+                }
+            }
+            updateDiagnosisBackButton();
+            window.scrollTo({ top: 0, behavior: 'smooth' });
         }
 
         function nextDiagnosisStep(step) {
@@ -2139,16 +2408,12 @@
                     selectAnswer(prevStep, inp.value.trim());
                 }
             }
-            document.querySelectorAll('.step-card').forEach(c => c.classList.add('hidden'));
-            const card = document.getElementById('step-' + step);
-            if (card) card.classList.remove('hidden');
-            const indicator = document.getElementById('diagnosis-step-indicator');
-            if (indicator) indicator.innerText = 'Step ' + step + ' of 5';
-            for (let i = 1; i <= step; i++) {
-                const p = document.getElementById('prog-' + i);
-                if (p) { p.classList.remove('bg-surface-container-high'); p.classList.add('bg-primary'); }
-            }
-            window.scrollTo({ top: 0, behavior: 'smooth' });
+            goToDiagnosisStep(step);
+        }
+
+        function prevDiagnosisStep() {
+            if (currentDiagnosisStep <= 1) return;
+            goToDiagnosisStep(currentDiagnosisStep - 1);
         }
 
         // ── Step 5: Generate full verdict ────────────────────────────────────
@@ -2169,14 +2434,18 @@
             questionnaireData.answers = questionnaireData.answers.map(a => a || 'No specific preference');
 
             try {
+                // Stage 2: text-only — answers + budget + Stage 1 report (NO image)
                 const res = await fetch(`${API_BASE}/ai/generate-verdict`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                        imageBase64: questionnaireData.imageBase64,
                         answers: questionnaireData.answers,
                         budgetMin: questionnaireData.budgetMin,
                         budgetMax: questionnaireData.budgetMax,
+                        faceReport: questionnaireData.faceReport || {
+                            detected_concerns: questionnaireData.detected_concerns || [],
+                            questions: questionnaireData.questions || [],
+                        },
                     }),
                 });
 
@@ -2189,9 +2458,15 @@
 
                 renderVerdictUI(json.data);
 
-                // Background save to MongoDB
-                const concern = questionnaireData.answers[0] || 'General Analysis';
-                saveScanResult(concern, json.data);
+                // Background save — clinical title from AI concerns, not raw answers
+                const concern = deriveScanTitle({
+                    ...json.data,
+                    detected_concerns: questionnaireData.detected_concerns,
+                });
+                saveScanResult(concern, {
+                    ...json.data,
+                    detected_concerns: questionnaireData.detected_concerns || [],
+                });
 
             } catch (err) {
                 if (loadingEl) loadingEl.classList.add('hidden');
@@ -2626,7 +2901,10 @@
 
         // Maps a concern category to a colour badge
         const CONCERN_COLORS = {
+            'Acne & Pimple Analysis': { bg: 'bg-red-100 dark:bg-red-900/30', text: 'text-red-700 dark:text-red-300', dot: 'bg-red-500' },
             'Acne & Blemishes': { bg: 'bg-red-100 dark:bg-red-900/30', text: 'text-red-700 dark:text-red-300', dot: 'bg-red-500' },
+            'Skin Texture Report': { bg: 'bg-teal-100 dark:bg-teal-900/30', text: 'text-teal-700 dark:text-teal-300', dot: 'bg-teal-500' },
+            'Clinical Skin Analysis': { bg: 'bg-surface-container dark:bg-surface-container-high', text: 'text-on-surface-variant', dot: 'bg-primary' },
             'Hyperpigmentation': { bg: 'bg-yellow-100 dark:bg-yellow-900/30', text: 'text-yellow-700 dark:text-yellow-300', dot: 'bg-yellow-500' },
             'Dryness & Flaking': { bg: 'bg-blue-100 dark:bg-blue-900/30', text: 'text-blue-700 dark:text-blue-300', dot: 'bg-blue-500' },
             'Fine Lines & Aging': { bg: 'bg-purple-100 dark:bg-purple-900/30', text: 'text-purple-700 dark:text-purple-300', dot: 'bg-purple-500' },
