@@ -57,10 +57,26 @@ const FACE_ANALYSIS_FALLBACK = {
   zones: ['full face'],
   detected_concerns: ['General skin assessment'],
   questions: [
-    'What is your primary skin concern right now?',
-    'How sensitive is your skin to new active ingredients?',
-    'What does your current morning and night routine look like?',
-    'Do you have any known allergies or ingredients you must avoid?',
+    {
+      id: 'q1',
+      question: 'What is your primary skin concern right now?',
+      options: ['Active breakouts / acne', 'Dryness or flaking', 'Oiliness or shine', 'Uneven tone or texture'],
+    },
+    {
+      id: 'q2',
+      question: 'How sensitive is your skin to new active ingredients?',
+      options: ['Very reactive — burns or stings easily', 'Mildly sensitive — occasional redness', 'Normal — tolerates most products', 'Not sure — never tested actives'],
+    },
+    {
+      id: 'q3',
+      question: 'What does your current morning and night skincare routine look like?',
+      options: ['Minimal — just cleanser & moisturiser', 'Intermediate — 3–5 targeted products', 'Advanced — multiple serums & actives', 'No routine at the moment'],
+    },
+    {
+      id: 'q4',
+      question: 'Do you have any known ingredient allergies or sensitivities?',
+      options: ['Fragrance or essential oils', 'Nuts, seeds or plant extracts', 'Acids (AHAs / BHAs / retinol)', 'None known'],
+    },
   ],
   _fallback: true,
 };
@@ -323,6 +339,83 @@ function isEmptyObject(value) {
   );
 }
 
+/**
+ * Normalise the `questions` array from an AI response into a guaranteed
+ * array of exactly 4 objects: { id, question, options[4] }.
+ *
+ * Handles all degraded formats the LLM might return:
+ *   – Plain string  → converted to object; context-safe defaults injected for options
+ *   – Object with missing / short options array → options filled with context-safe defaults
+ *   – Fewer than 4 items → padded with fallback question objects
+ *   – More than 4 items → truncated to 4
+ */
+const SAFE_DEFAULT_OPTIONS = [
+  'Yes, significantly',
+  'Moderate / Sometimes',
+  'Mild / Rarely',
+  'No / Not applicable',
+];
+
+function sanitizeQuestions(rawQuestions) {
+  const fallbackQs = FACE_ANALYSIS_FALLBACK.questions;
+
+  // Ensure we have an array to work with
+  let questions = Array.isArray(rawQuestions) ? rawQuestions : [];
+
+  // Normalise each element to { id, question, options[4] }
+  questions = questions.map((item, idx) => {
+    let id, questionText, options;
+
+    if (typeof item === 'string') {
+      // Legacy / degraded: plain string question, no options
+      id = `q${idx + 1}`;
+      questionText = item.trim();
+      options = null;
+    } else if (item && typeof item === 'object') {
+      id = String(item.id || `q${idx + 1}`);
+      questionText = String(item.question || item.text || item.q || '').trim();
+      options = item.options;
+    } else {
+      id = `q${idx + 1}`;
+      questionText = '';
+      options = null;
+    }
+
+    // Fall back to fallback question text if empty
+    if (!questionText) {
+      questionText = (fallbackQs[idx] || fallbackQs[0]).question;
+    }
+
+    // Sanitise options array
+    if (!Array.isArray(options) || options.length < 2) {
+      // Use fallback question's options if available, otherwise generic safe defaults
+      options = (fallbackQs[idx] && Array.isArray(fallbackQs[idx].options))
+        ? fallbackQs[idx].options
+        : [...SAFE_DEFAULT_OPTIONS];
+    } else {
+      // Normalise each option to a non-empty string; pad if needed
+      options = options
+        .map(o => String(o ?? '').trim())
+        .filter(o => o.length > 0)
+        .slice(0, 4);
+      while (options.length < 4) {
+        options.push(SAFE_DEFAULT_OPTIONS[options.length] || 'N/A');
+      }
+    }
+
+    return { id, question: questionText, options };
+  });
+
+  // Pad to exactly 4 if fewer questions came back
+  while (questions.length < 4) {
+    const fb = fallbackQs[questions.length] || fallbackQs[0];
+    questions.push({ ...fb });
+  }
+
+  // Cap at exactly 4
+  return questions.slice(0, 4);
+}
+
 /** Quiet schema check used by Stage 2 tier validate (no console spam). */
 function isValidVerdictPayload(rawText) {
   if (!rawText || !String(rawText).trim()) return false;
@@ -563,20 +656,12 @@ router.post('/analyze-face', async (req, res) => {
       parsed = { ...FACE_ANALYSIS_FALLBACK };
     }
 
-    if (!Array.isArray(parsed.questions) || parsed.questions.length !== 4) {
-      console.warn('[AI] analyze-face: invalid questions shape — applying fallback questions');
-      parsed = {
-        skin_type: parsed.skin_type || FACE_ANALYSIS_FALLBACK.skin_type,
-        severity: parsed.severity || FACE_ANALYSIS_FALLBACK.severity,
-        zones: Array.isArray(parsed.zones) && parsed.zones.length
-          ? parsed.zones
-          : FACE_ANALYSIS_FALLBACK.zones,
-        detected_concerns: Array.isArray(parsed.detected_concerns) && parsed.detected_concerns.length
-          ? parsed.detected_concerns
-          : FACE_ANALYSIS_FALLBACK.detected_concerns,
-        questions: FACE_ANALYSIS_FALLBACK.questions,
-        _fallback: true,
-      };
+    // Sanitize questions — normalises strings, injects missing options, pads/trims to exactly 4
+    parsed.questions = sanitizeQuestions(parsed.questions);
+
+    if (parsed.questions.length !== 4) {
+      console.warn('[AI] analyze-face: sanitizeQuestions could not produce 4 items — using fallback questions');
+      parsed.questions = FACE_ANALYSIS_FALLBACK.questions;
     }
 
     console.log(

@@ -2249,33 +2249,57 @@
         }
 
         // ── Inject AI-generated questions into step cards ────────────────────
+        // Each item in `questions` can be:
+        //   • An object: { id, question, options[] }  ← new format from backend
+        //   • A plain string                          ← legacy / fallback graceful
         function injectAIQuestions(questions) {
-            const defaultOptions = [
-                ['Yes, clearly visible', 'Somewhat', 'Barely noticeable', 'Not sure'],
-                ['Very sensitive / reactive', 'Moderately sensitive', 'Normal / resilient', 'Not sure'],
-                ['Minimal routine', 'Intermediate routine', 'Advanced (multiple actives)', 'Building a new routine'],
-                ['None known', 'Fragrance', 'Essential oils', 'Nuts / seeds'],
+            // Context-safe default options used ONLY if an item truly has no options
+            const safeDefaults = [
+                ['Yes, significantly', 'Moderate / Sometimes', 'Mild / Rarely', 'No / Not applicable'],
+                ['Yes, significantly', 'Moderate / Sometimes', 'Mild / Rarely', 'No / Not applicable'],
+                ['Yes, significantly', 'Moderate / Sometimes', 'Mild / Rarely', 'No / Not applicable'],
+                ['Yes, significantly', 'Moderate / Sometimes', 'Mild / Rarely', 'No / Not applicable'],
             ];
 
-            questions.forEach((q, idx) => {
+            questions.forEach((item, idx) => {
                 const stepNum = idx + 1;
+
+                // ── Resolve question text (object or plain string) ──────────
+                const questionText = (item && typeof item === 'object')
+                    ? (item.question || item.text || item.q || `Question ${stepNum}`)
+                    : String(item || `Question ${stepNum}`);
+
+                // ── Resolve options array (object, or fall back to safe defaults) ──
+                let opts = (item && typeof item === 'object' && Array.isArray(item.options) && item.options.length >= 2)
+                    ? item.options
+                    : safeDefaults[idx];
+
+                // Ensure we always have exactly 4 buttons
+                opts = opts.slice(0, 4);
+                while (opts.length < 4) opts.push(safeDefaults[0][opts.length] || 'N/A');
+
                 const qEl = document.getElementById(`step-${stepNum}-question`);
                 const optsEl = document.getElementById(`step-${stepNum}-options`);
-                if (qEl) qEl.textContent = q;
+
+                if (qEl) qEl.textContent = questionText;
+
                 if (optsEl) {
                     optsEl.innerHTML = '';
-                    defaultOptions[idx].forEach(opt => {
+                    opts.forEach(opt => {
                         const nextStep = stepNum < 4 ? stepNum + 1 : 5;
                         const btn = document.createElement('button');
                         btn.className = 'step-option-btn border border-outline-variant hover:border-primary p-4 rounded-lg text-left hover:bg-surface-container transition-colors font-body-sm text-on-surface w-full';
-                        btn.textContent = opt;
+                        btn.textContent = String(opt);
                         btn.onclick = () => {
-                            // Mark selected
+                            // Clear custom text input so the button selection takes priority
+                            const inp = document.getElementById(`step-${stepNum}-input`);
+                            if (inp) inp.value = '';
+                            // Highlight selected button, clear others
                             optsEl.querySelectorAll('.step-option-btn').forEach(b => {
                                 b.classList.remove('border-primary', 'bg-primary/5');
                             });
                             btn.classList.add('border-primary', 'bg-primary/5');
-                            selectAnswer(stepNum, opt);
+                            selectAnswer(stepNum, String(opt));
                             setTimeout(() => nextDiagnosisStep(nextStep), 280);
                         };
                         optsEl.appendChild(btn);
@@ -2287,10 +2311,22 @@
         // ── Fallback questions (used when AI call fails) ──────────────────────
         function injectFallbackQuestions() {
             const fallback = [
-                'What is your primary skin concern?',
-                'How sensitive is your skin to new products?',
-                'What is your current skincare routine focus?',
-                'Do you have any known ingredient allergies?',
+                {
+                    id: 'q1', question: 'What is your primary skin concern?',
+                    options: ['Active breakouts / acne', 'Dryness or flaking', 'Oiliness or shine', 'Uneven tone or texture'],
+                },
+                {
+                    id: 'q2', question: 'How sensitive is your skin to new products?',
+                    options: ['Very reactive — burns or stings', 'Mildly sensitive', 'Normal / resilient', 'Not sure'],
+                },
+                {
+                    id: 'q3', question: 'What is your current skincare routine focus?',
+                    options: ['Minimal — cleanser & moisturiser', '3–5 targeted products', 'Multiple serums & actives', 'No routine yet'],
+                },
+                {
+                    id: 'q4', question: 'Do you have any known ingredient allergies?',
+                    options: ['Fragrance or essential oils', 'Nuts, seeds or plant extracts', 'Acids (AHAs / BHAs)', 'None known'],
+                },
             ];
             injectAIQuestions(fallback);
         }
@@ -2354,14 +2390,28 @@
             if (step >= 1 && step <= 4) {
                 const answer = questionnaireData.answers[step - 1];
                 const optsEl = document.getElementById(`step-${step}-options`);
-                if (optsEl && answer) {
+                const inp = document.getElementById(`step-${step}-input`);
+                if (optsEl) {
+                    // Always reset all button highlights first
                     optsEl.querySelectorAll('.step-option-btn').forEach(b => {
-                        if (b.textContent === answer) {
-                            b.classList.add('border-primary', 'bg-primary/5');
-                        } else {
-                            b.classList.remove('border-primary', 'bg-primary/5');
-                        }
+                        b.classList.remove('border-primary', 'bg-primary/5');
                     });
+                    // Restore button highlight only if the answer matches a button (not a custom typed one)
+                    if (answer && inp && inp.value.trim() !== answer) {
+                        optsEl.querySelectorAll('.step-option-btn').forEach(b => {
+                            if (b.textContent.trim() === answer.trim()) {
+                                b.classList.add('border-primary', 'bg-primary/5');
+                            }
+                        });
+                    }
+                    // If answer came from custom input, show it in the input field
+                    if (inp && answer) {
+                        const isButtonAnswer = Array.from(optsEl.querySelectorAll('.step-option-btn'))
+                            .some(b => b.textContent.trim() === answer.trim());
+                        if (!isButtonAnswer) {
+                            inp.value = answer;
+                        }
+                    }
                 }
             }
             updateDiagnosisBackButton();
@@ -2369,12 +2419,23 @@
         }
 
         function nextDiagnosisStep(step) {
-            // Capture free-text answer from previous step input if no button was clicked
+            // Capture free-text answer from previous step.
+            // Custom typed input TAKES PRIORITY over a previously button-selected answer.
             const prevStep = step - 1;
             if (prevStep >= 1 && prevStep <= 4) {
                 const inp = document.getElementById(`step-${prevStep}-input`);
-                if (inp && inp.value.trim() && !questionnaireData.answers[prevStep - 1]) {
+                if (inp && inp.value.trim()) {
+                    // Typed input overrides any button selection
                     selectAnswer(prevStep, inp.value.trim());
+                    // Deselect all option buttons visually since user typed their own answer
+                    const optsEl = document.getElementById(`step-${prevStep}-options`);
+                    if (optsEl) {
+                        optsEl.querySelectorAll('.step-option-btn').forEach(b => {
+                            b.classList.remove('border-primary', 'bg-primary/5');
+                        });
+                    }
+                } else if (!questionnaireData.answers[prevStep - 1]) {
+                    // No typed input and no button answer — leave unanswered (filled in at submit time)
                 }
             }
             goToDiagnosisStep(step);
