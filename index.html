@@ -452,6 +452,32 @@
             flex-shrink: 0;
         }
 
+        .clinical-glass-container {
+            background: rgba(255, 255, 255, 0.92);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border: 1px solid rgba(226, 232, 240, 0.9);
+            box-shadow: 0 25px 50px -12px rgba(15, 23, 42, 0.08), 0 4px 6px -2px rgba(15, 23, 42, 0.02);
+            border-radius: 20px;
+            padding: 26px;
+        }
+
+        .dark .clinical-glass-container {
+            background: rgba(15, 23, 42, 0.85);
+            border-color: rgba(30, 41, 59, 1);
+        }
+
+        .clinical-obsidian-title {
+            color: #0f172a;
+            font-weight: 700;
+            font-size: 1.1rem;
+            letter-spacing: -0.01em;
+        }
+
+        .dark .clinical-obsidian-title {
+            color: #f8fafc;
+        }
+
         .clinical-scanner .ring-outer {
             position: absolute;
             inset: 0;
@@ -519,6 +545,8 @@
             border-color: rgba(148, 211, 193, 0.5);
         }
     </style>
+    <!-- html2pdf.js for client-side PDF export -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
 </head>
 
 <body
@@ -919,6 +947,14 @@
             </div>
         </section>
 
+        <!-- ══════════════════════════════════════════════════════════════
+             STATE: REPORT — A4 Clinical Diagnostic Report
+             Shown after quiz Step 4 is completed, before the product verdict.
+        ══════════════════════════════════════════════════════════════ -->
+        <section class="view-section hidden flex-grow flex flex-col w-full fade-in" id="state-report">
+            <div class="max-w-5xl mx-auto px-2 py-6 w-full" id="state-report-inner"></div>
+        </section>
+
         <!-- State 3 & 4: Results (Deep Analysis) -->
         <section class="view-section hidden flex-grow flex flex-col w-full pb-xl fade-in" id="state-results">
             <!-- Re-scan Desktop Banner -->
@@ -948,17 +984,11 @@
                         </div>
                     </div>
                 </div>
-                <!-- Cycling text -->
-                <div class="text-center max-w-xs">
-                    <p class="font-headline-md text-on-surface mb-1 clinical-scanner-text" id="results-loading-text">
-                        Scanning facial topography...</p>
-                    <p class="font-body-sm text-on-surface-variant">Dr. Cosmolyze is building your clinical profile.</p>
-                </div>
-                <!-- Skeleton shimmer bars (mimic loading content) -->
-                <div class="w-full max-w-sm space-y-3">
-                    <div class="skeleton-bar h-4 w-full"></div>
-                    <div class="skeleton-bar h-4 w-4/5"></div>
-                    <div class="skeleton-bar h-4 w-3/5"></div>
+                <!-- Dynamic Condition Title -->
+                <h3 id="verdict-dynamic-title" class="clinical-obsidian-title mt-4 mb-2 text-center"></h3>
+                <!-- Stacked Milestone Container (Apple / OpenAI style clinical loading sequence) -->
+                <div id="verdict-milestones-container"
+                    class="w-full max-w-md clinical-glass-container space-y-3.5 text-left transition-all duration-300">
                 </div>
             </div>
 
@@ -2446,71 +2476,499 @@
             goToDiagnosisStep(currentDiagnosisStep - 1);
         }
 
-        // ── Step 5: Generate full verdict ────────────────────────────────────
+        let verdictMilestoneTimeouts = [];
+
+        // ── Step 5: Show Clinical Report, pre-fetch verdict in background ────
         async function triggerScanAnalysis() {
-            // Show results view with loading spinner
+            // Fill any unanswered steps with a default
+            questionnaireData.answers = questionnaireData.answers.map(a => a || 'No specific preference');
+
+            // ── 1. Build & show the A4 Clinical Diagnostic Report ────────────
+            const reportContainer = document.getElementById('state-report-inner');
+            if (reportContainer) {
+                reportContainer.innerHTML = buildReportHTML(questionnaireData.faceReport);
+            }
+            switchView('state-report');
+
+            // Reset verdict state
+            questionnaireData.verdictData = null;
+            questionnaireData.verdictError = null;
+
+            // ── 2. Pre-fetch the product verdict silently in the background ───
+            //    Stored in memory without any toast notification or UI interrupt
+            questionnaireData.verdictPromise = (async () => {
+                try {
+                    const res = await fetch(`${API_BASE}/ai/generate-verdict`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            answers: questionnaireData.answers,
+                            budgetMin: questionnaireData.budgetMin,
+                            budgetMax: questionnaireData.budgetMax,
+                            faceReport: questionnaireData.faceReport || {
+                                detected_concerns: questionnaireData.detected_concerns || [],
+                                questions: questionnaireData.questions || [],
+                            },
+                        }),
+                    });
+
+                    const json = await res.json();
+                    if (!res.ok || !json.success) {
+                        throw new Error(json.message || 'Verdict generation failed.');
+                    }
+
+                    questionnaireData.verdictData = json.data;
+                    renderVerdictUI(json.data);
+
+                    const concern = deriveScanTitle({
+                        ...json.data,
+                        detected_concerns: questionnaireData.detected_concerns,
+                    });
+                    saveScanResult(concern, {
+                        ...json.data,
+                        detected_concerns: questionnaireData.detected_concerns || [],
+                    });
+                    return json.data;
+                } catch (err) {
+                    questionnaireData.verdictError = err;
+                    if (document.getElementById('results-error-msg')) {
+                        const isServerBusy = err.message && (err.message.includes('timed out') || err.message.includes('busy') || err.message.includes('503'));
+                        document.getElementById('results-error-msg').textContent = isServerBusy
+                            ? 'The server is busy handling high traffic. Please wait a moment and retry.'
+                            : (err.message || 'Unable to generate verdict. Please try again.');
+                    }
+                    console.error('[AI Verdict]', err);
+                    throw err;
+                }
+            })();
+        }
+
+        const VERDICT_MILESTONES = [
+            {
+                heading: 'Synthesizing Diagnostic Report & Active Ingredients...',
+                bullets: [
+                    'Extracting targeted actives identified in Stage 1 report'
+                ]
+            },
+            {
+                heading: 'Cross-Referencing Survey & Sensitivity Profile...',
+                bullets: [
+                    'Filtering formulas against safety and tolerance parameters'
+                ]
+            },
+            {
+                heading: 'Scanning Global Formulation Database...',
+                bullets: [
+                    'Validating ingredient concentrations & absorption index'
+                ]
+            },
+            {
+                heading: 'Unlocking Precision Verdict...',
+                bullets: [
+                    '100% Precision Match Identified. Rendering Verdict...'
+                ]
+            }
+        ];
+
+        function updateMilestoneUI(stepIndex, isCompleted) {
+            const container = document.getElementById('verdict-milestones-container');
+            if (!container) return;
+
+            let html = '';
+            VERDICT_MILESTONES.forEach((m, idx) => {
+                if (idx > stepIndex) return;
+
+                const isCurrent = idx === stepIndex && !isCompleted;
+                const isDone = idx < stepIndex || (idx === stepIndex && isCompleted);
+
+                let iconHtml = '';
+                if (isDone) {
+                    iconHtml = `<span class="inline-flex items-center justify-center w-5 h-5 rounded-full bg-emerald-100 text-emerald-700 text-xs font-bold">✓</span>`;
+                } else if (isCurrent) {
+                    iconHtml = `<div class="w-4 h-4 rounded-full border-2 border-emerald-700 border-t-transparent animate-spin inline-block shrink-0 mx-0.5"></div>`;
+                }
+
+                let bulletsHtml = m.bullets.map(b => `
+                    <p class="flex items-start gap-1.5 text-xs text-slate-500 dark:text-slate-400 font-medium leading-relaxed">
+                        <span class="text-emerald-600 font-bold">✓</span> ${b}
+                    </p>
+                `).join('');
+
+                html += `
+                    <div class="transition-all duration-300 ${isCurrent ? 'opacity-100 scale-100' : 'opacity-85'}">
+                        <div class="flex items-center gap-2.5">
+                            ${iconHtml}
+                            <h4 class="text-sm font-semibold ${isCurrent ? 'text-emerald-700 dark:text-emerald-500' : 'text-slate-800 dark:text-slate-200'}">${m.heading}</h4>
+                        </div>
+                        <div class="ml-6 mt-1.5 space-y-1">
+                            ${bulletsHtml}
+                        </div>
+                    </div>
+                `;
+            });
+
+            container.innerHTML = html;
+        }
+
+        // ── Reveal Verdict with 7.5s Smooth Multi-Milestone Sequence ──────
+        async function revealVerdict() {
             switchView('state-results');
+
             const loadingEl = document.getElementById('results-loading');
             const errorEl = document.getElementById('results-error');
             const winnerEl = document.getElementById('winner-card');
             const altSection = document.getElementById('alternatives-section');
+            const container = document.getElementById('verdict-milestones-container');
 
-            if (loadingEl) loadingEl.classList.remove('hidden');
-            if (errorEl) errorEl.classList.add('hidden');
+            // Clear active milestone timeouts
+            verdictMilestoneTimeouts.forEach(t => clearTimeout(t));
+            verdictMilestoneTimeouts = [];
+
             if (winnerEl) winnerEl.classList.add('hidden');
             if (altSection) altSection.classList.add('hidden');
-
-            // Fill any unanswered steps with a default
-            questionnaireData.answers = questionnaireData.answers.map(a => a || 'No specific preference');
-
-            try {
-                // Stage 2: text-only — answers + budget + Stage 1 report (NO image)
-                const res = await fetch(`${API_BASE}/ai/generate-verdict`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        answers: questionnaireData.answers,
-                        budgetMin: questionnaireData.budgetMin,
-                        budgetMax: questionnaireData.budgetMax,
-                        faceReport: questionnaireData.faceReport || {
-                            detected_concerns: questionnaireData.detected_concerns || [],
-                            questions: questionnaireData.questions || [],
-                        },
-                    }),
-                });
-
-                if (loadingEl) loadingEl.classList.add('hidden');
-
-                const json = await res.json();
-                if (!res.ok || !json.success) {
-                    throw new Error(json.message || 'Verdict generation failed.');
-                }
-
-                renderVerdictUI(json.data);
-
-                // Background save — clinical title from AI concerns, not raw answers
-                const concern = deriveScanTitle({
-                    ...json.data,
-                    detected_concerns: questionnaireData.detected_concerns,
-                });
-                saveScanResult(concern, {
-                    ...json.data,
-                    detected_concerns: questionnaireData.detected_concerns || [],
-                });
-
-            } catch (err) {
-                if (loadingEl) loadingEl.classList.add('hidden');
-                if (errorEl) {
-                    const msgEl = document.getElementById('results-error-msg');
-                    const isServerBusy = err.message && (err.message.includes('timed out') || err.message.includes('busy') || err.message.includes('503'));
-                    if (msgEl) msgEl.textContent = isServerBusy
-                        ? 'The server is busy handling high traffic. Please wait a moment and retry.'
-                        : (err.message || 'Unable to generate verdict. Please try again.');
-                    errorEl.classList.remove('hidden');
-                }
-                console.error('[AI Verdict]', err);
-                showToast('⚠️ Server busy — tap "Start New Scan" to retry.', 'error');
+            if (errorEl) errorEl.classList.add('hidden');
+            if (loadingEl) {
+                loadingEl.classList.remove('hidden');
+                loadingEl.style.opacity = '1';
             }
+
+            if (container) container.innerHTML = '';
+
+            const primaryConcern = (questionnaireData && questionnaireData.faceReport && questionnaireData.faceReport.detected_concerns && questionnaireData.faceReport.detected_concerns[0])
+                ? questionnaireData.faceReport.detected_concerns[0]
+                : (questionnaireData && questionnaireData.detected_concerns && questionnaireData.detected_concerns[0] ? questionnaireData.detected_concerns[0] : 'Skin Condition');
+
+            const titleEl = document.getElementById('verdict-dynamic-title');
+            if (titleEl) {
+                titleEl.textContent = `Analyzing ${primaryConcern} Clinical Profile...`;
+            }
+
+            // Step 1: 0.0s – 1.8s
+            updateMilestoneUI(0, false);
+
+            // Step 2: 1.8s – 3.8s
+            verdictMilestoneTimeouts.push(setTimeout(() => {
+                updateMilestoneUI(1, false);
+            }, 1800));
+
+            // Step 3: 3.8s – 5.8s
+            verdictMilestoneTimeouts.push(setTimeout(() => {
+                updateMilestoneUI(2, false);
+            }, 3800));
+
+            // Step 4: 5.8s – 7.5s
+            verdictMilestoneTimeouts.push(setTimeout(() => {
+                updateMilestoneUI(3, false);
+            }, 5800));
+
+            // Complete transition at 7.5s (7500ms)
+            const finalTimer = setTimeout(async () => {
+                updateMilestoneUI(3, true);
+
+                if (questionnaireData.verdictPromise) {
+                    try {
+                        await questionnaireData.verdictPromise;
+                    } catch (e) {
+                        // Handled via verdictError check below
+                    }
+                }
+
+                if (questionnaireData.verdictError && !questionnaireData.verdictData) {
+                    if (loadingEl) loadingEl.classList.add('hidden');
+                    if (errorEl) errorEl.classList.remove('hidden');
+                } else {
+                    if (loadingEl) loadingEl.classList.add('hidden');
+                    if (winnerEl) winnerEl.classList.remove('hidden');
+                    if (altSection) altSection.classList.remove('hidden');
+                }
+            }, 7500);
+
+            verdictMilestoneTimeouts.push(finalTimer);
+        }
+
+        // ── A4 Clinical Diagnostic Report Builder ────────────────────────────
+        function buildReportHTML(data) {
+            const scanId = (data && data.scan_id) ? data.scan_id : '#CSM-2026-' + Math.floor(1000 + Math.random() * 9000);
+            const evalDate = (data && data.date) ? data.date : new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+            const observation = (data && data.clinical_observation) ? data.clinical_observation
+                : 'Upon reviewing the localized scan, primary concerns are present in the targeted active zone.';
+
+            const rootCauses = (data && data.root_causes && data.root_causes.length) ? data.root_causes : [
+                { title: 'Surface Layer Build-up', explanation: 'Accumulated dead skin cells and environmental residue can impair the skin barrier and affect overall clarity.' },
+                { title: 'Hydration Imbalance', explanation: 'Disruption in the natural moisture-retention capacity can exacerbate visible surface concerns.' },
+            ];
+
+            const recoverySteps = (data && data.recovery_plan && data.recovery_plan.length)
+                ? data.recovery_plan
+                : [
+                    { title: 'STEP 1: LIFESTYLE & HABIT CORRECTION', details: 'Maintain adequate hydration and protect the affected area from unnecessary friction and UV exposure to prevent further aggravation of the detected concern.' },
+                    { title: 'STEP 2: TOPICAL HOME CARE', details: 'Apply specific localized treatments as recommended in the active ingredients section below to safely target the root cause of the pigment or texture concern.' }
+                ];
+
+            const actives = (data && data.required_actives && data.required_actives.length) ? data.required_actives : [
+                { name: 'Niacinamide (10%)', function: 'Regulates sebum, reduces surface redness, and strengthens the skin barrier.' },
+                { name: 'Hyaluronic Acid (2%)', function: 'Draws moisture into the epidermis to plump and maintain healthy hydration.' },
+            ];
+
+            return `
+            <style>
+                .a4-wrapper {
+                    width: 210mm;
+                    margin: 0 auto;
+                    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.15);
+                    border-radius: 4px;
+                    background-color: #FFFFFF;
+                    text-align: left;
+                }
+                .a4-container {
+                    width: 210mm;
+                    min-height: 295mm;
+                    padding: 10mm 15mm;
+                    box-sizing: border-box;
+                    background-color: #FFFFFF;
+                    overflow: visible;
+                    text-align: left;
+                    font-family: 'Arial', 'Helvetica Neue', Helvetica, sans-serif;
+                    color: #111111;
+                    font-size: 9pt;
+                    line-height: 1.4;
+                    display: flex;
+                    flex-direction: column;
+                }
+                .rpt-header {
+                    border-bottom: 2px solid #000000;
+                    padding-bottom: 6px;
+                    margin-bottom: 10px;
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: flex-end;
+                }
+                .rpt-clinic-name {
+                    font-size: 18pt;
+                    font-weight: bold;
+                    letter-spacing: 1px;
+                    margin: 0;
+                    color: #000000;
+                }
+                .rpt-sub-name {
+                    font-size: 8.5pt;
+                    color: #555555;
+                    text-transform: uppercase;
+                    margin-top: 2px;
+                }
+                .rpt-confidential-tag {
+                    font-size: 8pt;
+                    font-weight: bold;
+                    padding: 3px 6px;
+                    border: 1px solid #000;
+                }
+                .rpt-header-meta {
+                    width: 100%;
+                    font-size: 9pt;
+                    color: #222222;
+                    border-bottom: 1px dashed #cccccc;
+                    padding-bottom: 8px;
+                    margin-bottom: 12px;
+                    border-collapse: collapse;
+                }
+                .rpt-header-meta td { padding: 2px 0; }
+                .rpt-h2 {
+                    font-size: 10pt;
+                    text-transform: uppercase;
+                    border-bottom: 1px solid #cccccc;
+                    padding-bottom: 3px;
+                    margin-top: 10px;
+                    margin-bottom: 6px;
+                    color: #000000;
+                    font-weight: bold;
+                }
+                .rpt-protocol-note {
+                    background-color: #f9f9f9;
+                    border-left: 3px solid #000000;
+                    padding: 6px 12px;
+                    font-style: italic;
+                    margin-bottom: 10px;
+                    font-size: 8pt;
+                    color: #333333;
+                }
+                .rpt-action-flex {
+                    display: flex;
+                    gap: 10px;
+                    margin-bottom: 0;
+                }
+                .rpt-action-box {
+                    flex: 1;
+                    background: #fafafa;
+                    border: 1px solid #e0e0e0;
+                    padding: 8px 12px;
+                    border-radius: 4px;
+                }
+                .doc-highlight {
+                    background: rgba(254, 240, 138, 0.75);
+                    padding: 1px 4px;
+                    border-radius: 2px;
+                    font-weight: 600;
+                }
+                .rpt-finding-title {
+                    font-weight: bold;
+                    font-size: 9pt;
+                    margin-bottom: 6px;
+                    color: #000000;
+                    border-bottom: 1px solid #dddddd;
+                    padding-bottom: 3px;
+                    text-transform: uppercase;
+                }
+                .rpt-landscape-box {
+                    background: #fdfbf7;
+                    border: 1px solid #e2dcd0;
+                    border-left: 4px solid #000000;
+                    padding: 8px 12px;
+                    border-radius: 4px;
+                    margin-top: 8px;
+                }
+                .rpt-actives-grid {
+                    display: flex;
+                    flex-wrap: wrap;
+                    gap: 8px;
+                    margin-top: 4px;
+                }
+                .rpt-active-card {
+                    flex: 1 1 calc(50% - 4px);
+                    min-width: 120px;
+                    background: #ffffff;
+                    border: 1px solid #e8e8e8;
+                    border-radius: 3px;
+                    padding: 6px 8px;
+                    box-sizing: border-box;
+                }
+                .rpt-footer-divider {
+                    margin-top: auto;
+                    border-top: 1px solid #e0e0e0;
+                    padding-top: 8px;
+                }
+                .rpt-footer-note {
+                    font-size: 8pt;
+                    color: #666666;
+                    text-align: center;
+                    line-height: 1.4;
+                    margin: 0;
+                }
+                @media (max-width: 768px) {
+                    .a4-wrapper { width: 100%; }
+                    .a4-container { width: 100%; min-height: unset; padding: 12px; }
+                    .rpt-action-flex { flex-direction: column; }
+                }
+            </style>
+
+            <div class="a4-wrapper">
+                <div class="a4-container" id="report-content">
+                    <div class="rpt-header">
+                        <div>
+                            <div class="rpt-clinic-name">COSMOLYZE CLINICAL</div>
+                            <div class="rpt-sub-name">Digital Dermatological Diagnostics</div>
+                        </div>
+                        <div>
+                            <span class="rpt-confidential-tag">STRICTLY CONFIDENTIAL</span>
+                        </div>
+                    </div>
+
+                    <table class="rpt-header-meta">
+                        <tr>
+                            <td style="width:50%;"><strong>Patient Scan ID:</strong> <span class="doc-highlight">${scanId}</span></td>
+                            <td style="width:50%;text-align:right;"><strong>Date of Evaluation:</strong> ${evalDate}</td>
+                        </tr>
+                        <tr>
+                            <td><strong>Evaluation Method:</strong> Precision Facial Spatial Scan</td>
+                            <td style="text-align:right;"><strong>Status:</strong> Preliminary Diagnostic Report</td>
+                        </tr>
+                    </table>
+
+                    <div class="rpt-protocol-note">
+                        <strong>PRIMARY DIAGNOSTIC PROTOCOL:</strong> The skin findings below are evaluated using precision spatial scanning. Diagnostics are focused directly on the targeted active zone to ensure maximum accuracy and personalized ingredient matching.
+                    </div>
+
+                    <div class="rpt-h2">1. DETAILED CLINICAL OBSERVATION</div>
+                    <p style="margin-bottom:6px;text-align:justify;">${observation}</p>
+
+                    <div class="rpt-h2">2. UNDERSTANDING THE ROOT CAUSE (WHY IS THIS HAPPENING?)</div>
+                    <p style="margin-bottom:6px;">Based on your scan, here are the key triggers behind this condition:</p>
+                    <ul style="padding-left:18px;margin-top:4px;margin-bottom:6px;">
+                        ${rootCauses.map(rc => `<li style="margin-bottom:4px;"><strong>${rc.title}:</strong> ${rc.explanation}</li>`).join('')}
+                    </ul>
+
+                    <div class="rpt-h2">3. YOUR PERSONALISED RECOVERY PLAN</div>
+                    <div class="rpt-action-flex">
+                        ${recoverySteps.map(step => `
+                            <div class="rpt-action-box">
+                                <div class="rpt-finding-title"><span class="doc-highlight">${step.title}</span></div>
+                                <p style="font-size:8.5pt;color:#444444;margin:0;line-height:1.5;">${step.details}</p>
+                            </div>
+                        `).join('')}
+                    </div>
+
+                    <div class="rpt-landscape-box" style="margin-top:8px;background:#fdfbf7;border:1px solid #e2dcd0;border-left:4px solid #000;padding:8px 12px;border-radius:4px;">
+                        <div class="rpt-finding-title">STEP 3: WHAT YOUR SKIN ACTUALLY NEEDS (ACTIVE INGREDIENTS)</div>
+                        <p style="font-size:8.5pt;color:#444444;margin:0 0 8px 0;">Generic face washes won't solve this. Your skin needs these specific ingredients, chosen for your exact condition:</p>
+                        <div class="rpt-actives-grid">
+                            ${actives.map(act => `
+                                <div class="rpt-active-card">
+                                    <p style="margin:0 0 3px 0;font-size:8.5pt;color:#111111;"><span class="doc-highlight">${act.name}</span></p>
+                                    <p style="margin:0;font-size:8pt;color:#444444;line-height:1.4;">${act.function}</p>
+                                </div>
+                            `).join('')}
+                        </div>
+                    </div>
+
+                    <div class="rpt-footer-divider">
+                        <p class="rpt-footer-note">
+                            Generated by Cosmolyze AI to provide tailored, actionable skincare guidance. Designed to perfect your daily routine with precision, while deep clinical pathologies are best reviewed with a certified skin specialist.
+                        </p>
+                    </div>
+                </div>
+            </div>
+
+            <div style="margin-top:20px;margin-bottom:32px;display:flex;flex-wrap:wrap;justify-content:center;align-items:center;gap:12px;">
+                <button id="downloadBtn" onclick="downloadPDF()" class="px-5 py-2.5 text-sm font-semibold rounded-lg bg-slate-900 text-white hover:bg-slate-800 transition shadow" style="border:none;cursor:pointer;">
+                    &#11015;&nbsp; Download PDF Report
+                </button>
+                <button onclick="revealVerdict()" class="px-6 py-2.5 text-sm font-semibold rounded-lg bg-emerald-600 text-white hover:bg-emerald-700 transition shadow-md" style="border:none;cursor:pointer;">
+                    Get My Product Verdict &nbsp;&#10148;
+                </button>
+            </div>
+            `;
+        }
+
+        // ── PDF Download Handler ─────────────────────────────────────────────
+        function downloadPDF() {
+            const btn = document.getElementById('downloadBtn');
+            if (!btn) return;
+            const originalText = btn.innerHTML;
+            btn.innerHTML = '&#9203; Generating PDF... Please wait';
+            btn.disabled = true;
+            const element = document.getElementById('report-content');
+            if (!element) {
+                btn.innerHTML = originalText;
+                btn.disabled = false;
+                showToast('Report element not found. Please try again.', 'error');
+                return;
+            }
+            const opt = {
+                margin: 0,
+                filename: 'Cosmolyze_Clinical_Diagnostic_Report.pdf',
+                image: { type: 'jpeg', quality: 1 },
+                html2canvas: { scale: 4, useCORS: true, scrollX: 0, scrollY: 0 },
+                pagebreak: { mode: 'avoid-all' },
+                jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
+            };
+            html2pdf().set(opt).from(element).save().then(() => {
+                btn.innerHTML = originalText;
+                btn.disabled = false;
+            }).catch(err => {
+                console.error('[PDF Export]', err);
+                btn.innerHTML = originalText;
+                btn.disabled = false;
+                showToast('PDF generation failed. Please try again.', 'error');
+            });
         }
 
         // ── SVG Warning Triangle (inline, no icon font dependency) ───────────

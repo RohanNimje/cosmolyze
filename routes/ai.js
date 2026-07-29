@@ -1,38 +1,38 @@
-/**
- * routes/ai.js — Cosmolyze Hybrid AI Engine
+﻿/**
+ * routes/ai.js â€” Cosmolyze Hybrid AI Engine
  *
  * Dynamic Multi-Provider Failover Architecture:
- *   ┌─────────────────────────────────────────────────────────────────────────┐
- *   │  STAGE 1  POST /analyze-face  (Dynamic Vision Cascade)                  │
- *   │    Step 1 → Gemini Direct  (GEMINI_API_KEY_CURRENT × GEMINI_VISION_MODEL_N) │
- *   │    Step 2 → Gemini Direct  (GEMINI_API_KEY_NEW     × GEMINI_VISION_MODEL_N) │
- *   │    Step 3 → OpenAI Direct  (OPENAI_API_KEY         × OPENAI_VISION_MODEL_N) │
- *   │             [Future Guard — skipped silently if key/models absent]      │
- *   │    Step 4 → DeepSeek Direct (DEEPSEEK_API_KEY      × DEEPSEEK_VISION_MODEL_N)│
- *   │             [Future Guard — skipped silently if key/models absent]      │
- *   │    Step 5 → OpenRouter     (OPENROUTER_API_KEY     × OPENROUTER_VISION_MODEL_N)│
- *   │    Step 6 → Groq           (GROQ_API_KEY_NEW|GROQ_API_KEY × GROQ_TEXT_MODEL_1)│
- *   │                                                                         │
- *   │  STAGE 2  POST /generate-verdict (Dynamic Text-Only Cascade)            │
- *   │    Step 1 → Gemini Direct  (GEMINI_API_KEY_CURRENT × GEMINI_TEXT_MODEL_N)    │
- *   │    Step 2 → Gemini Direct  (GEMINI_API_KEY_NEW     × GEMINI_TEXT_MODEL_N)    │
- *   │    Step 3 → OpenAI Direct  [Future Guard]                               │
- *   │    Step 4 → DeepSeek Direct [Future Guard]                              │
- *   │    Step 5 → OpenRouter     (OPENROUTER_TEXT_MODEL_N)                    │
- *   │    Step 6 → Groq           Final Fallback                               │
- *   │                                                                         │
- *   │  STABLE   POST /analyze-formula  → GROQ_API_KEY + GROQ_TEXT_MODEL       │
- *   │  LIBRARY  POST /search-ingredient → GROQ_API_KEY + GROQ_TEXT_MODEL      │
- *   └─────────────────────────────────────────────────────────────────────────┘
+ *   â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+ *   â”‚  STAGE 1  POST /analyze-face  (Dynamic Vision Cascade)                  â”‚
+ *   â”‚    Step 1 â†’ Gemini Direct  (GEMINI_API_KEY_CURRENT Ã— GEMINI_VISION_MODEL_N) â”‚
+ *   â”‚    Step 2 â†’ Gemini Direct  (GEMINI_API_KEY_NEW     Ã— GEMINI_VISION_MODEL_N) â”‚
+ *   â”‚    Step 3 â†’ OpenAI Direct  (OPENAI_API_KEY         Ã— OPENAI_VISION_MODEL_N) â”‚
+ *   â”‚             [Future Guard â€” skipped silently if key/models absent]      â”‚
+ *   â”‚    Step 4 â†’ DeepSeek Direct (DEEPSEEK_API_KEY      Ã— DEEPSEEK_VISION_MODEL_N)â”‚
+ *   â”‚             [Future Guard â€” skipped silently if key/models absent]      â”‚
+ *   â”‚    Step 5 â†’ OpenRouter     (OPENROUTER_API_KEY     Ã— OPENROUTER_VISION_MODEL_N)â”‚
+ *   â”‚    Step 6 â†’ Groq           (GROQ_API_KEY_NEW|GROQ_API_KEY Ã— GROQ_TEXT_MODEL_1)â”‚
+ *   â”‚                                                                         â”‚
+ *   â”‚  STAGE 2  POST /generate-verdict (Dynamic Text-Only Cascade)            â”‚
+ *   â”‚    Step 1 â†’ Gemini Direct  (GEMINI_API_KEY_CURRENT Ã— GEMINI_TEXT_MODEL_N)    â”‚
+ *   â”‚    Step 2 â†’ Gemini Direct  (GEMINI_API_KEY_NEW     Ã— GEMINI_TEXT_MODEL_N)    â”‚
+ *   â”‚    Step 3 â†’ OpenAI Direct  [Future Guard]                               â”‚
+ *   â”‚    Step 4 â†’ DeepSeek Direct [Future Guard]                              â”‚
+ *   â”‚    Step 5 â†’ OpenRouter     (OPENROUTER_TEXT_MODEL_N)                    â”‚
+ *   â”‚    Step 6 â†’ Groq           Final Fallback                               â”‚
+ *   â”‚                                                                         â”‚
+ *   â”‚  STABLE   POST /analyze-formula  â†’ GROQ_API_KEY + GROQ_TEXT_MODEL       â”‚
+ *   â”‚  LIBRARY  POST /search-ingredient â†’ GROQ_API_KEY + GROQ_TEXT_MODEL      â”‚
+ *   â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
  *
  * Model discovery: getModelsByPrefix('GEMINI_VISION_MODEL_') scans process.env
- * for _1, _2, _3 … suffixed keys and returns them in sorted numeric order.
+ * for _1, _2, _3 â€¦ suffixed keys and returns them in sorted numeric order.
  *
  * Future provider guard: OpenAI Direct and DeepSeek Direct are only activated
  * when both their API key AND at least one numbered model key are present in
  * process.env. If either is absent the provider is silently skipped (no throw).
  *
- * Policy: exactly 1 attempt per tier. No rigid request timeouts — connections
+ * Policy: exactly 1 attempt per tier. No rigid request timeouts â€” connections
  * stay open until the engine streams its full response payload.
  */
 
@@ -45,7 +45,7 @@ const {
   FORMULA_SYSTEM_PROMPT,
 } = require('../prompts');
 
-// ── Env helpers — trim so spaced .env values (e.g. " KEY") still bind ────────
+// â”€â”€ Env helpers â€” trim so spaced .env values (e.g. " KEY") still bind â”€â”€â”€â”€â”€â”€â”€â”€
 const env = (key) => String(process.env[key] ?? '').trim();
 
 const getKeys = () => ({
@@ -54,13 +54,13 @@ const getKeys = () => ({
   geminiCurrent: env('GEMINI_API_KEY_CURRENT'),
   geminiNew: env('GEMINI_API_KEY_NEW'),
   openrouter: env('OPENROUTER_API_KEY'),
-  openai: env('OPENAI_API_KEY'),       // Future guard — empty string = disabled
-  deepseek: env('DEEPSEEK_API_KEY'),   // Future guard — empty string = disabled
+  openai: env('OPENAI_API_KEY'),       // Future guard â€” empty string = disabled
+  deepseek: env('DEEPSEEK_API_KEY'),   // Future guard â€” empty string = disabled
 });
 
 /**
  * Scan process.env for all keys that start with `prefix`, sort them numerically
- * by their numeric suffix (_1, _2, _3 …), and return an ordered array of the
+ * by their numeric suffix (_1, _2, _3 â€¦), and return an ordered array of the
  * resolved model name strings (empty values are filtered out).
  *
  * @param {string} prefix  e.g. 'GEMINI_VISION_MODEL_'
@@ -78,26 +78,39 @@ function getModelsByPrefix(prefix) {
     .filter(Boolean);
 }
 
-/** Legacy static model map — used ONLY by the stable /analyze-formula and
+/** Legacy static model map â€” used ONLY by the stable /analyze-formula and
  *  /search-ingredient routes which are not part of the dynamic cascade. */
 const getModels = () => ({
-  gemini:                    env('GEMINI_MODEL')                      || 'gemini-3.5-flash',
-  geminiVisionPrimary:       env('GEMINI_VISION_MODEL_PRIMARY')       || 'gemini-2.5-flash',
-  geminiVisionSecondary:     env('GEMINI_VISION_MODEL_SECONDARY')     || 'gemini-3.5-flash',
-  openrouterVisionPrimary:   env('OPENROUTER_VISION_MODEL_PRIMARY')   || 'google/gemini-2.5-flash',
+  gemini: env('GEMINI_MODEL') || 'gemini-3.5-flash',
+  geminiVisionPrimary: env('GEMINI_VISION_MODEL_PRIMARY') || 'gemini-2.5-flash',
+  geminiVisionSecondary: env('GEMINI_VISION_MODEL_SECONDARY') || 'gemini-3.5-flash',
+  openrouterVisionPrimary: env('OPENROUTER_VISION_MODEL_PRIMARY') || 'google/gemini-2.5-flash',
   openrouterVisionSecondary: env('OPENROUTER_VISION_MODEL_SECONDARY') || 'google/gemini-3.5-flash',
-  groqText:                  env('GROQ_TEXT_MODEL')                   || 'llama-3.3-70b-versatile',
+  groqText: env('GROQ_TEXT_MODEL') || 'llama-3.3-70b-versatile',
 });
 
 // Transient / quota / auth / server-side failures that should trip failover
 const FAILOVER_STATUSES = new Set([401, 404, 429, 500, 502, 503, 504]);
 
-// ── Fallback payloads (keep the UI alive when AI JSON is unrecoverable) ──────
+// â”€â”€ Fallback payloads (keep the UI alive when AI JSON is unrecoverable) â”€â”€â”€â”€â”€â”€
 const FACE_ANALYSIS_FALLBACK = {
   skin_type: 'combination',
   severity: 'mild',
   zones: ['full face'],
   detected_concerns: ['General skin assessment'],
+  clinical_observation: 'Upon reviewing the localized scan, the skin presents with general surface irregularities. A full analysis requires additional context from your diagnostic questionnaire.',
+  root_causes: [
+    { title: 'Surface Layer Build-up', explanation: 'Accumulated dead skin cells and environmental residue can impair the skin barrier and affect overall clarity.' },
+    { title: 'Hydration Imbalance', explanation: 'Disruption in the skin\'s natural moisture-retention capacity can exacerbate visible surface concerns.' },
+  ],
+  recovery_plan: [
+    { title: 'STEP 1: LIFESTYLE & HABIT CORRECTION', details: 'Maintain adequate hydration and protect the affected area from unnecessary friction and UV exposure to prevent further aggravation of the detected concern.' },
+    { title: 'STEP 2: TOPICAL HOME CARE', details: 'Apply specific localized treatments as recommended in the active ingredients section to safely target the root cause of the concern.' },
+  ],
+  required_actives: [
+    { name: 'Niacinamide (10%)', function: 'Regulates sebum production, reduces surface redness, and strengthens the skin barrier over time.' },
+    { name: 'Hyaluronic Acid (2%)', function: 'Draws moisture into the epidermis to plump and maintain healthy skin hydration levels.' },
+  ],
   questions: [
     {
       id: 'q1',
@@ -107,12 +120,12 @@ const FACE_ANALYSIS_FALLBACK = {
     {
       id: 'q2',
       question: 'How sensitive is your skin to new active ingredients?',
-      options: ['Very reactive — burns or stings easily', 'Mildly sensitive — occasional redness', 'Normal — tolerates most products', 'Not sure — never tested actives'],
+      options: ['Very reactive â€” burns or stings easily', 'Mildly sensitive â€” occasional redness', 'Normal â€” tolerates most products', 'Not sure â€” never tested actives'],
     },
     {
       id: 'q3',
       question: 'What does your current morning and night skincare routine look like?',
-      options: ['Minimal — just cleanser & moisturiser', 'Intermediate — 3–5 targeted products', 'Advanced — multiple serums & actives', 'No routine at the moment'],
+      options: ['Minimal â€” just cleanser & moisturiser', 'Intermediate â€” 3â€“5 targeted products', 'Advanced â€” multiple serums & actives', 'No routine at the moment'],
     },
     {
       id: 'q4',
@@ -173,7 +186,7 @@ const VERDICT_FALLBACK = {
       price_inr: 790,
       optimal_active: 'High-strength AHA/BHA chemical exfoliation',
       detected_sensitizer: 'Glycolic Acid / Salicylic Acid (high %)',
-      medical_alert: 'Potent acids — avoid on compromised, sensitive, or barrier-impaired skin.',
+      medical_alert: 'Potent acids â€” avoid on compromised, sensitive, or barrier-impaired skin.',
       match_status: 'avoid',
       amazon_url: 'https://www.amazon.in/s?k=The+Ordinary+AHA+30+BHA+2',
     },
@@ -186,7 +199,7 @@ const FORMULA_FALLBACK = {
   overall_score: 70,
   overall_rating: 'Fair',
   summary: 'A complete clinical parse was unavailable. Please re-run the analysis for a full ingredient breakdown.',
-  concerns: ['Automated parse incomplete — re-analyse for precise sensitizer detection'],
+  concerns: ['Automated parse incomplete â€” re-analyse for precise sensitizer detection'],
   positives: ['Re-submit the ingredient list to receive a full clinical audit'],
   ingredients: [],
   _fallback: true,
@@ -197,12 +210,12 @@ const LIBRARY_SEARCH_FALLBACK = {
   _fallback: true,
 };
 
-// Prompt overlay for Ingredient Library search — reuses FORMULA schema keys
+// Prompt overlay for Ingredient Library search â€” reuses FORMULA schema keys
 const LIBRARY_SEARCH_SYSTEM_PROMPT = `${FORMULA_SYSTEM_PROMPT}
 
 ADDITIONAL LIBRARY SEARCH RULES:
 - The user is searching the Ingredient Library by name/token, NOT submitting a full product formula.
-- Return a JSON object with an "ingredients" array of 1–6 matching cosmetic ingredients.
+- Return a JSON object with an "ingredients" array of 1â€“6 matching cosmetic ingredients.
 - Each ingredient object MUST use these exact keys (library card contract):
   "name", "rating", "function", "notes"
 - Optionally include "keywords" (space-separated search tokens) for UI filtering.
@@ -210,10 +223,10 @@ ADDITIONAL LIBRARY SEARCH RULES:
 - "function" is the Function line on the library card.
 - "rating" must be one of: "safe", "caution", "avoid".
 - Ignore product_name / overall_score / overall_rating / summary / concerns / positives
-  if not relevant — but ALWAYS return a top-level "ingredients" array.
+  if not relevant â€” but ALWAYS return a top-level "ingredients" array.
 - Prefer well-known INCI / cosmetic ingredient matches for the search tokens.`;
 
-// ── JSON sanitization helpers ────────────────────────────────────────────────
+// â”€â”€ JSON sanitization helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 /** Strip ```json ... ``` fences (leading, trailing, or wrapped). */
 function stripMarkdownFences(raw) {
@@ -386,10 +399,10 @@ function isEmptyObject(value) {
  * array of exactly 4 objects: { id, question, options[4] }.
  *
  * Handles all degraded formats the LLM might return:
- *   – Plain string  → converted to object; context-safe defaults injected for options
- *   – Object with missing / short options array → options filled with context-safe defaults
- *   – Fewer than 4 items → padded with fallback question objects
- *   – More than 4 items → truncated to 4
+ *   â€“ Plain string  â†’ converted to object; context-safe defaults injected for options
+ *   â€“ Object with missing / short options array â†’ options filled with context-safe defaults
+ *   â€“ Fewer than 4 items â†’ padded with fallback question objects
+ *   â€“ More than 4 items â†’ truncated to 4
  */
 const SAFE_DEFAULT_OPTIONS = [
   'Yes, significantly',
@@ -471,7 +484,7 @@ function isValidVerdictPayload(rawText) {
 }
 
 /**
- * Run tiers sequentially — exactly 1 attempt each.
+ * Run tiers sequentially â€” exactly 1 attempt each.
  * On HTTP/quota/server failure the error is caught silently and the next tier runs.
  */
 async function runTripleFailover(label, tiers) {
@@ -484,11 +497,11 @@ async function runTripleFailover(label, tiers) {
       if (tier.validate && !tier.validate(result)) {
         throw new Error(`${tier.name} returned an empty or invalid payload`);
       }
-      console.log(`[AI] ${tier.name} ✓ succeeded`);
+      console.log(`[AI] ${tier.name} âœ“ succeeded`);
       return result;
     } catch (err) {
       lastError = err;
-      console.warn(`[AI] ${tier.name} ✗ failed — ${err.message}`);
+      console.warn(`[AI] ${tier.name} âœ— failed â€” ${err.message}`);
       // Continue silently to next tier
     }
   }
@@ -496,9 +509,9 @@ async function runTripleFailover(label, tiers) {
   throw lastError || new Error(`${label}: all failover tiers exhausted`);
 }
 
-// ═════════════════════════════════════════════════════════════════════════════
-//  GEMINI ENGINE — single-shot (1 attempt). Stage 1 & Stage 2 Gemini tiers.
-// ═════════════════════════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+//  GEMINI ENGINE â€” single-shot (1 attempt). Stage 1 & Stage 2 Gemini tiers.
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 /**
  * @param {string} systemPrompt
@@ -521,7 +534,7 @@ async function callGemini(systemPrompt, userText, imageBase64, apiKey, modelOver
   const parts = [{ text: userText }];
   if (imageBase64) {
     const match = imageBase64.match(/^data:([^;]+);base64,(.+)$/);
-    if (!match) throw new Error('Invalid imageBase64 format — expected a valid data URI');
+    if (!match) throw new Error('Invalid imageBase64 format â€” expected a valid data URI');
     const [, mimeType, b64data] = match;
     parts.push({ inline_data: { mime_type: mimeType, data: b64data } });
   }
@@ -530,13 +543,13 @@ async function callGemini(systemPrompt, userText, imageBase64, apiKey, modelOver
     system_instruction: { parts: [{ text: systemPrompt }] },
     contents: [{ role: 'user', parts }],
     generationConfig: {
-      temperature: 0.3,
+      temperature: 0,
       maxOutputTokens: 8192,
       responseMimeType: 'application/json',
     },
   };
 
-  // No AbortController timeout — stay open until the engine finishes streaming.
+  // No AbortController timeout â€” stay open until the engine finishes streaming.
   const res = await fetch(endpoint, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -557,9 +570,9 @@ async function callGemini(systemPrompt, userText, imageBase64, apiKey, modelOver
   return text;
 }
 
-// ═════════════════════════════════════════════════════════════════════════════
-//  OPENROUTER ENGINE — single-shot vision. OpenAI-compatible REST via openrouter.ai.
-// ═════════════════════════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+//  OPENROUTER ENGINE â€” single-shot vision. OpenAI-compatible REST via openrouter.ai.
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 /**
  * @param {object} opts
@@ -596,12 +609,12 @@ async function callOpenRouter({ systemPrompt, userText, apiKey, model, imageBase
       { role: 'system', content: systemPrompt },
       { role: 'user', content: userContent },
     ],
-    temperature: 0.3,
+    temperature: 0,
     max_tokens: 8192,
     response_format: { type: 'json_object' },
   };
 
-  // No AbortController timeout — stay open until the engine finishes streaming.
+  // No AbortController timeout â€” stay open until the engine finishes streaming.
   const res = await fetch(endpoint, {
     method: 'POST',
     headers: {
@@ -627,9 +640,9 @@ async function callOpenRouter({ systemPrompt, userText, apiKey, model, imageBase
   return text;
 }
 
-// ═════════════════════════════════════════════════════════════════════════════
-//  GROQ ENGINE — single-shot text + optional vision. OpenAI-compatible REST.
-// ═════════════════════════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+//  GROQ ENGINE â€” single-shot text + optional vision. OpenAI-compatible REST.
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 /**
  * @param {object} opts
@@ -666,12 +679,12 @@ async function callGroq({ systemPrompt, userText, apiKey, model, imageBase64 = n
       { role: 'system', content: systemPrompt },
       { role: 'user', content: userContent },
     ],
-    temperature: 0.3,
+    temperature: 0,
     max_tokens: 8192,
     response_format: { type: 'json_object' },
   };
 
-  // No AbortController timeout — stay open until the engine finishes streaming.
+  // No AbortController timeout â€” stay open until the engine finishes streaming.
   const res = await fetch(endpoint, {
     method: 'POST',
     headers: {
@@ -695,10 +708,10 @@ async function callGroq({ systemPrompt, userText, apiKey, model, imageBase64 = n
   return text;
 }
 
-// ═════════════════════════════════════════════════════════════════════════════
-//  OPENAI-COMPATIBLE ENGINE — covers both OpenAI Direct and DeepSeek Direct.
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+//  OPENAI-COMPATIBLE ENGINE â€” covers both OpenAI Direct and DeepSeek Direct.
 //  Pass baseURL='https://api.deepseek.com' for DeepSeek.
-// ═════════════════════════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 /**
  * @param {object} opts
@@ -719,7 +732,7 @@ async function callOpenAI({
   baseURL = 'https://api.openai.com/v1',
 }) {
   if (!apiKey) throw new Error('OpenAI-compatible API key is not configured');
-  if (!model)  throw new Error('OpenAI-compatible model name is required');
+  if (!model) throw new Error('OpenAI-compatible model name is required');
 
   const endpoint = `${baseURL.replace(/\/$/, '')}/chat/completions`;
 
@@ -739,12 +752,12 @@ async function callOpenAI({
       { role: 'system', content: systemPrompt },
       { role: 'user', content: userContent },
     ],
-    temperature: 0.3,
+    temperature: 0,
     max_tokens: 8192,
     response_format: { type: 'json_object' },
   };
 
-  // No AbortController timeout — stay open until the engine finishes streaming.
+  // No AbortController timeout â€” stay open until the engine finishes streaming.
   const res = await fetch(endpoint, {
     method: 'POST',
     headers: {
@@ -768,7 +781,7 @@ async function callOpenAI({
   return text;
 }
 
-/** Stable formula / library path — original GROQ_API_KEY + GROQ_TEXT_MODEL */
+/** Stable formula / library path â€” original GROQ_API_KEY + GROQ_TEXT_MODEL */
 async function callGroqStable(systemPrompt, userText) {
   const keys = getKeys();
   const models = getModels();
@@ -780,23 +793,23 @@ async function callGroqStable(systemPrompt, userText) {
   });
 }
 
-// ═════════════════════════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 //  ROUTES
-// ═════════════════════════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  POST /api/ai/analyze-face  — STAGE 1 Dynamic Multi-Provider Vision Cascade
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+//  POST /api/ai/analyze-face  â€” STAGE 1 Dynamic Multi-Provider Vision Cascade
 //  Body:   { imageBase64: "data:image/jpeg;base64,..." }
 //  Response: { success: true, data: { detected_concerns, questions } }
 //
 //  Cascade order (built dynamically at request time from process.env):
-//    Step 1 — Gemini Direct × GEMINI_VISION_MODEL_N (Current Key)
-//    Step 2 — Gemini Direct × GEMINI_VISION_MODEL_N (New Key)
-//    Step 3 — OpenAI Direct × OPENAI_VISION_MODEL_N  [future guard]
-//    Step 4 — DeepSeek      × DEEPSEEK_VISION_MODEL_N [future guard]
-//    Step 5 — OpenRouter    × OPENROUTER_VISION_MODEL_N
-//    Step 6 — Groq          × GROQ_TEXT_MODEL_1 (final fallback)
-// ─────────────────────────────────────────────────────────────────────────────
+//    Step 1 â€” Gemini Direct Ã— GEMINI_VISION_MODEL_N (Current Key)
+//    Step 2 â€” Gemini Direct Ã— GEMINI_VISION_MODEL_N (New Key)
+//    Step 3 â€” OpenAI Direct Ã— OPENAI_VISION_MODEL_N  [future guard]
+//    Step 4 â€” DeepSeek      Ã— DEEPSEEK_VISION_MODEL_N [future guard]
+//    Step 5 â€” OpenRouter    Ã— OPENROUTER_VISION_MODEL_N
+//    Step 6 â€” Groq          Ã— GROQ_TEXT_MODEL_1 (final fallback)
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 router.post('/analyze-face', async (req, res) => {
   try {
     const { imageBase64 } = req.body;
@@ -811,24 +824,24 @@ router.post('/analyze-face', async (req, res) => {
     const userText = 'Please analyze this patient face image and generate the 4 personalised diagnostic questions as instructed.';
     const keys = getKeys();
 
-    // ── Resolve dynamic model lists from process.env ───────────────────────
-    const geminiVisionModels   = getModelsByPrefix('GEMINI_VISION_MODEL_');
-    const openaiVisionModels   = getModelsByPrefix('OPENAI_VISION_MODEL_');
+    // â”€â”€ Resolve dynamic model lists from process.env â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    const geminiVisionModels = getModelsByPrefix('GEMINI_VISION_MODEL_');
+    const openaiVisionModels = getModelsByPrefix('OPENAI_VISION_MODEL_');
     const deepseekVisionModels = getModelsByPrefix('DEEPSEEK_VISION_MODEL_');
-    const orVisionModels       = getModelsByPrefix('OPENROUTER_VISION_MODEL_');
-    const groqTextModels       = getModelsByPrefix('GROQ_TEXT_MODEL_');
+    const orVisionModels = getModelsByPrefix('OPENROUTER_VISION_MODEL_');
+    const groqTextModels = getModelsByPrefix('GROQ_TEXT_MODEL_');
 
     // Groq final fallback: prefer GROQ_TEXT_MODEL_1, else legacy GROQ_TEXT_MODEL
     const groqModel = groqTextModels[0] || env('GROQ_TEXT_MODEL') || 'llama-3.3-70b-versatile';
-    const groqKey   = keys.groqNew || keys.groq;
+    const groqKey = keys.groqNew || keys.groq;
 
     console.log('[AI] analyze-face: Stage 1 dynamic multi-provider cascade starting...');
-    console.log(`[AI] Vision models — Gemini: [${geminiVisionModels}] | OR: [${orVisionModels}] | Groq fallback: ${groqModel}`);
+    console.log(`[AI] Vision models â€” Gemini: [${geminiVisionModels}] | OR: [${orVisionModels}] | Groq fallback: ${groqModel}`);
 
-    // ── Build the ordered tier list ────────────────────────────────────────
+    // â”€â”€ Build the ordered tier list â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     const tiers = [];
 
-    // Step 1: Gemini Direct — CURRENT key × all numbered GEMINI_VISION_MODEL_N
+    // Step 1: Gemini Direct â€” CURRENT key Ã— all numbered GEMINI_VISION_MODEL_N
     for (const model of geminiVisionModels) {
       const m = model; // capture for closure
       tiers.push({
@@ -837,7 +850,7 @@ router.post('/analyze-face', async (req, res) => {
       });
     }
 
-    // Step 2: Gemini Direct — NEW key × all numbered GEMINI_VISION_MODEL_N
+    // Step 2: Gemini Direct â€” NEW key Ã— all numbered GEMINI_VISION_MODEL_N
     for (const model of geminiVisionModels) {
       const m = model;
       tiers.push({
@@ -846,7 +859,7 @@ router.post('/analyze-face', async (req, res) => {
       });
     }
 
-    // Step 3: OpenAI Direct — future guard (only when key + models are present)
+    // Step 3: OpenAI Direct â€” future guard (only when key + models are present)
     if (keys.openai && openaiVisionModels.length > 0) {
       for (const model of openaiVisionModels) {
         const m = model;
@@ -864,7 +877,7 @@ router.post('/analyze-face', async (req, res) => {
       }
     }
 
-    // Step 4: DeepSeek Direct — future guard (only when key + models are present)
+    // Step 4: DeepSeek Direct â€” future guard (only when key + models are present)
     if (keys.deepseek && deepseekVisionModels.length > 0) {
       for (const model of deepseekVisionModels) {
         const m = model;
@@ -883,7 +896,7 @@ router.post('/analyze-face', async (req, res) => {
       }
     }
 
-    // Step 5: OpenRouter — all numbered OPENROUTER_VISION_MODEL_N
+    // Step 5: OpenRouter â€” all numbered OPENROUTER_VISION_MODEL_N
     if (keys.openrouter && orVisionModels.length > 0) {
       for (const model of orVisionModels) {
         const m = model;
@@ -901,7 +914,7 @@ router.post('/analyze-face', async (req, res) => {
       }
     }
 
-    // Step 6: Groq — final fallback
+    // Step 6: Groq â€” final fallback
     tiers.push({
       name: `Stage 1 Attempting: ${groqModel} via Groq (Final Fallback)`,
       run: () =>
@@ -925,11 +938,11 @@ router.post('/analyze-face', async (req, res) => {
       parsed = { ...FACE_ANALYSIS_FALLBACK };
     }
 
-    // Sanitize questions — normalises strings, injects missing options, pads/trims to exactly 4
+    // Sanitize questions â€” normalises strings, injects missing options, pads/trims to exactly 4
     parsed.questions = sanitizeQuestions(parsed.questions);
 
     if (parsed.questions.length !== 4) {
-      console.warn('[AI] analyze-face: sanitizeQuestions could not produce 4 items — using fallback questions');
+      console.warn('[AI] analyze-face: sanitizeQuestions could not produce 4 items â€” using fallback questions');
       parsed.questions = FACE_ANALYSIS_FALLBACK.questions;
     }
 
@@ -942,10 +955,25 @@ router.post('/analyze-face', async (req, res) => {
     return res.status(200).json({
       success: true,
       data: {
-        skin_type: parsed.skin_type || FACE_ANALYSIS_FALLBACK.skin_type,
-        severity: parsed.severity || FACE_ANALYSIS_FALLBACK.severity,
-        zones: Array.isArray(parsed.zones) ? parsed.zones : FACE_ANALYSIS_FALLBACK.zones,
-        detected_concerns: parsed.detected_concerns || [],
+        // Core scan metadata
+        skin_type: parsed.skin_type_assessment || parsed.skin_type || FACE_ANALYSIS_FALLBACK.skin_type,
+        severity: parsed.severity_level || parsed.severity || FACE_ANALYSIS_FALLBACK.severity,
+        zones: Array.isArray(parsed.affected_zones) ? parsed.affected_zones
+          : Array.isArray(parsed.zones) ? parsed.zones
+            : FACE_ANALYSIS_FALLBACK.zones,
+        detected_concerns: Array.isArray(parsed.detected_concerns) ? parsed.detected_concerns : [],
+        // Clinical diagnostic report fields (new â€” passed through verbatim)
+        clinical_observation: parsed.clinical_observation || FACE_ANALYSIS_FALLBACK.clinical_observation,
+        root_causes: Array.isArray(parsed.root_causes) && parsed.root_causes.length
+          ? parsed.root_causes
+          : FACE_ANALYSIS_FALLBACK.root_causes,
+        recovery_plan: Array.isArray(parsed.recovery_plan) && parsed.recovery_plan.length
+          ? parsed.recovery_plan
+          : FACE_ANALYSIS_FALLBACK.recovery_plan,
+        required_actives: Array.isArray(parsed.required_actives) && parsed.required_actives.length
+          ? parsed.required_actives
+          : FACE_ANALYSIS_FALLBACK.required_actives,
+        // Diagnostic questions
         questions: parsed.questions,
         ...(parsed._fallback ? { fallback: true } : {}),
       },
@@ -963,20 +991,20 @@ router.post('/analyze-face', async (req, res) => {
   }
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  POST /api/ai/generate-verdict  — STAGE 2 Dynamic Multi-Provider Text Cascade
-//  Body:   { answers: [str×4], budgetMin, budgetMax, faceReport: Stage1JSON }
-//  CRITICAL: No imageBase64 — Stage 2 uses Stage 1 report + Q&A + budget only.
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+//  POST /api/ai/generate-verdict  â€” STAGE 2 Dynamic Multi-Provider Text Cascade
+//  Body:   { answers: [strÃ—4], budgetMin, budgetMax, faceReport: Stage1JSON }
+//  CRITICAL: No imageBase64 â€” Stage 2 uses Stage 1 report + Q&A + budget only.
 //  Response: { success: true, data: { top_winner, alternatives } }
 //
 //  Cascade order (built dynamically at request time from process.env):
-//    Step 1 — Gemini Direct × GEMINI_TEXT_MODEL_N (Current Key)
-//    Step 2 — Gemini Direct × GEMINI_TEXT_MODEL_N (New Key)
-//    Step 3 — OpenAI Direct × OPENAI_TEXT_MODEL_N  [future guard]
-//    Step 4 — DeepSeek      × DEEPSEEK_TEXT_MODEL_N [future guard]
-//    Step 5 — OpenRouter    × OPENROUTER_TEXT_MODEL_N
-//    Step 6 — Groq          × GROQ_TEXT_MODEL_1 (final fallback)
-// ─────────────────────────────────────────────────────────────────────────────
+//    Step 1 â€” Gemini Direct Ã— GEMINI_TEXT_MODEL_N (Current Key)
+//    Step 2 â€” Gemini Direct Ã— GEMINI_TEXT_MODEL_N (New Key)
+//    Step 3 â€” OpenAI Direct Ã— OPENAI_TEXT_MODEL_N  [future guard]
+//    Step 4 â€” DeepSeek      Ã— DEEPSEEK_TEXT_MODEL_N [future guard]
+//    Step 5 â€” OpenRouter    Ã— OPENROUTER_TEXT_MODEL_N
+//    Step 6 â€” Groq          Ã— GROQ_TEXT_MODEL_1 (final fallback)
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 router.post('/generate-verdict', async (req, res) => {
   try {
     const {
@@ -987,7 +1015,7 @@ router.post('/generate-verdict', async (req, res) => {
       stage1Report = null,
     } = req.body;
 
-    // Reject accidental image payloads — Stage 2 is text-only
+    // Reject accidental image payloads â€” Stage 2 is text-only
     if (req.body.imageBase64) {
       console.warn('[AI] generate-verdict: ignoring imageBase64 (Stage 2 is text-only)');
     }
@@ -1000,11 +1028,30 @@ router.post('/generate-verdict', async (req, res) => {
     }
 
     const report = faceReport || stage1Report || {};
-    const reportJson = JSON.stringify(report);
+
+    // â”€â”€ Extract and surface key Stage 1 fields explicitly for the LLM â”€â”€â”€â”€â”€
+    const clinicalObs = report.clinical_observation || 'Not available';
+    const requiredActives = Array.isArray(report.required_actives) && report.required_actives.length
+      ? report.required_actives.map(a => `${a.name}: ${a.function}`).join('\n')
+      : 'Not available';
+    const rootCausesText = Array.isArray(report.root_causes) && report.root_causes.length
+      ? report.root_causes.map(r => `${r.title}: ${r.explanation}`).join('\n')
+      : 'Not available';
+    const detectedConcerns = Array.isArray(report.detected_concerns)
+      ? report.detected_concerns.join(', ')
+      : 'Not available';
 
     const userText = `
-Stage 1 Clinical Face Report (JSON):
-${reportJson}
+STAGE 1 CLINICAL REPORT SUMMARY (read this first â€” your product picks must be anchored to this):
+- Detected Concerns: ${detectedConcerns}
+- Clinical Observation: ${clinicalObs}
+- Root Causes:
+${rootCausesText}
+- Required Active Ingredients (your top_winner MUST contain these):
+${requiredActives}
+
+Stage 1 Full Report (JSON for reference):
+${JSON.stringify(report)}
 
 Patient Diagnostic Questionnaire Responses:
 1. ${answers[0] || 'No answer provided'}
@@ -1012,19 +1059,19 @@ Patient Diagnostic Questionnaire Responses:
 3. ${answers[2] || 'No answer provided'}
 4. ${answers[3] || 'No answer provided'}
 
-Patient Budget Range: ₹${budgetMin} – ₹${budgetMax} INR
+Patient Budget Range: â‚¹${budgetMin} â€“ â‚¹${budgetMax} INR
 
 Using ONLY the Stage 1 report, questionnaire answers, and budget above (no image), generate the full clinical verdict JSON as instructed (top_winner + exactly 4 alternatives).
 `.trim();
 
     const keys = getKeys();
 
-    // ── Resolve dynamic model lists from process.env ───────────────────────
-    const geminiTextModels   = getModelsByPrefix('GEMINI_TEXT_MODEL_');
-    const openaiTextModels   = getModelsByPrefix('OPENAI_TEXT_MODEL_');
+    // â”€â”€ Resolve dynamic model lists from process.env â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    const geminiTextModels = getModelsByPrefix('GEMINI_TEXT_MODEL_');
+    const openaiTextModels = getModelsByPrefix('OPENAI_TEXT_MODEL_');
     const deepseekTextModels = getModelsByPrefix('DEEPSEEK_TEXT_MODEL_');
-    const orTextModels       = getModelsByPrefix('OPENROUTER_TEXT_MODEL_');
-    const groqTextModels     = getModelsByPrefix('GROQ_TEXT_MODEL_');
+    const orTextModels = getModelsByPrefix('OPENROUTER_TEXT_MODEL_');
+    const groqTextModels = getModelsByPrefix('GROQ_TEXT_MODEL_');
 
     // If no numbered GEMINI_TEXT_MODEL_N keys exist, fall back to legacy GEMINI_MODEL
     const geminiModelFallback = env('GEMINI_MODEL') || 'gemini-3.5-flash';
@@ -1032,15 +1079,15 @@ Using ONLY the Stage 1 report, questionnaire answers, and budget above (no image
 
     // Groq final fallback: prefer GROQ_TEXT_MODEL_1, else legacy GROQ_TEXT_MODEL
     const groqModel = groqTextModels[0] || env('GROQ_TEXT_MODEL') || 'llama-3.3-70b-versatile';
-    const groqKey   = keys.groqNew || keys.groq;
+    const groqKey = keys.groqNew || keys.groq;
 
-    console.log('[AI] generate-verdict: Stage 2 dynamic multi-provider cascade (text-only), budget ₹', budgetMin, '–', budgetMax);
-    console.log(`[AI] Text models — Gemini: [${effectiveGeminiModels}] | OR: [${orTextModels}] | Groq fallback: ${groqModel}`);
+    console.log('[AI] generate-verdict: Stage 2 dynamic multi-provider cascade (text-only), budget â‚¹', budgetMin, 'â€“', budgetMax);
+    console.log(`[AI] Text models â€” Gemini: [${effectiveGeminiModels}] | OR: [${orTextModels}] | Groq fallback: ${groqModel}`);
 
-    // ── Build the ordered tier list ────────────────────────────────────────
+    // â”€â”€ Build the ordered tier list â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     const tiers = [];
 
-    // Step 1: Gemini Direct — CURRENT key × all effective Gemini text models
+    // Step 1: Gemini Direct â€” CURRENT key Ã— all effective Gemini text models
     for (const model of effectiveGeminiModels) {
       const m = model;
       tiers.push({
@@ -1050,7 +1097,7 @@ Using ONLY the Stage 1 report, questionnaire answers, and budget above (no image
       });
     }
 
-    // Step 2: Gemini Direct — NEW key × all effective Gemini text models
+    // Step 2: Gemini Direct â€” NEW key Ã— all effective Gemini text models
     for (const model of effectiveGeminiModels) {
       const m = model;
       tiers.push({
@@ -1060,7 +1107,7 @@ Using ONLY the Stage 1 report, questionnaire answers, and budget above (no image
       });
     }
 
-    // Step 3: OpenAI Direct — future guard (only when key + models are present)
+    // Step 3: OpenAI Direct â€” future guard (only when key + models are present)
     if (keys.openai && openaiTextModels.length > 0) {
       for (const model of openaiTextModels) {
         const m = model;
@@ -1078,7 +1125,7 @@ Using ONLY the Stage 1 report, questionnaire answers, and budget above (no image
       }
     }
 
-    // Step 4: DeepSeek Direct — future guard (only when key + models are present)
+    // Step 4: DeepSeek Direct â€” future guard (only when key + models are present)
     if (keys.deepseek && deepseekTextModels.length > 0) {
       for (const model of deepseekTextModels) {
         const m = model;
@@ -1097,7 +1144,7 @@ Using ONLY the Stage 1 report, questionnaire answers, and budget above (no image
       }
     }
 
-    // Step 5: OpenRouter — all numbered OPENROUTER_TEXT_MODEL_N
+    // Step 5: OpenRouter â€” all numbered OPENROUTER_TEXT_MODEL_N
     if (keys.openrouter && orTextModels.length > 0) {
       for (const model of orTextModels) {
         const m = model;
@@ -1115,7 +1162,7 @@ Using ONLY the Stage 1 report, questionnaire answers, and budget above (no image
       }
     }
 
-    // Step 6: Groq — final fallback (no validate — accept whatever Groq returns)
+    // Step 6: Groq â€” final fallback (no validate â€” accept whatever Groq returns)
     tiers.push({
       name: `Stage 2 Attempting: ${groqModel} via Groq (Final Fallback)`,
       run: () =>
@@ -1139,7 +1186,7 @@ Using ONLY the Stage 1 report, questionnaire answers, and budget above (no image
     }
 
     if (!parsed.top_winner || !Array.isArray(parsed.alternatives) || isEmptyObject(parsed)) {
-      console.warn('[AI] generate-verdict: unexpected shape — applying full verdict fallback');
+      console.warn('[AI] generate-verdict: unexpected shape â€” applying full verdict fallback');
       parsed = { ...VERDICT_FALLBACK };
     }
 
@@ -1171,12 +1218,12 @@ Using ONLY the Stage 1 report, questionnaire answers, and budget above (no image
   }
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  POST /api/ai/analyze-formula  — STABLE (unchanged behaviour)
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+//  POST /api/ai/analyze-formula  â€” STABLE (unchanged behaviour)
 //  Engine: GROQ_API_KEY + GROQ_TEXT_MODEL
 //  Body:   { productName?: string, ingredientList: string }
 //  Response: { success: true, data: { summary, ingredients, concerns, positives } }
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 router.post('/analyze-formula', async (req, res) => {
   try {
     const { productName = '', ingredientList } = req.body;
@@ -1210,7 +1257,7 @@ Please analyze this formula and return the full clinical JSON breakdown as instr
     }
 
     if (!Array.isArray(parsed.ingredients)) {
-      console.warn('[AI] analyze-formula: missing ingredients array — applying fallback');
+      console.warn('[AI] analyze-formula: missing ingredients array â€” applying fallback');
       parsed = {
         ...FORMULA_FALLBACK,
         product_name: parsed.product_name || productName || 'Unknown Product',
@@ -1244,12 +1291,12 @@ Please analyze this formula and return the full clinical JSON breakdown as instr
   }
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  POST /api/ai/search-ingredient  — Ingredient Library Engine
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+//  POST /api/ai/search-ingredient  â€” Ingredient Library Engine
 //  Engine: GROQ_API_KEY + GROQ_TEXT_MODEL (FORMULA_SYSTEM_PROMPT structure)
 //  Body:   { query: string }
 //  Response: { success: true, data: { ingredients: [{ name, rating, function, notes, keywords }] } }
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 router.post('/search-ingredient', async (req, res) => {
   try {
     const query = String(req.body?.query ?? req.body?.q ?? req.body?.search ?? '').trim();
@@ -1309,7 +1356,7 @@ Each item must include: name, rating, function, notes (and optionally keywords).
         };
       });
 
-    console.log('[AI] search-ingredient: success —', ingredients.length, 'results for', query);
+    console.log('[AI] search-ingredient: success â€”', ingredients.length, 'results for', query);
     return res.status(200).json({
       success: true,
       data: {
