@@ -13,6 +13,8 @@ CRITICAL OUTPUT RULES (non-negotiable):
 4. Do NOT use trailing commas.
 5. Use null (unquoted) for empty optional fields.
 6. The JSON must be structurally complete and parseable by JSON.parse().
+7. Every array of objects (root_causes, recovery_plan, required_actives, questions, alternatives) MUST have properly opened '{' and closed '}' braces for EVERY item, with correct comma separators between items and NO trailing comma after the last item.
+8. Never omit opening or closing brackets '[' / ']' or braces '{' / '}'. Ensure the entire JSON object is closed before you finish.
 `.trim();
 
 const FACE_ANALYSIS_SYSTEM_PROMPT = `You are Dr. Cosmolyze, an elite board-certified chief dermatologist with 20+ years of clinical practice.

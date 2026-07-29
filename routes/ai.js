@@ -347,6 +347,13 @@ function balanceBrackets(s) {
 /**
  * Fail-safe AI JSON parser.
  * On total failure: log raw_response and return `fallback` (never throw if fallback given).
+ *
+ * Sanitization pipeline:
+ *   Pass 1: Strip markdown fences → extract JSON object → basic sanitize (trailing commas, BOM, smart quotes)
+ *   Pass 2: Fix unescaped quotes and control characters
+ *   Pass 3: Balance unclosed brackets/braces
+ *   Pass 4: Aggressive trailing-comma sweep + final quote fix + rebalance
+ *   Pass 5: Full-pipeline re-run from scratch with aggressive comma stripping
  */
 function parseAIJSON(raw, fallback = null, label = 'AI') {
   const raw_response = String(raw ?? '');
@@ -359,28 +366,46 @@ function parseAIJSON(raw, fallback = null, label = 'AI') {
     }
   };
 
+  // Pass 1: standard sanitization chain
   let cleaned = basicSanitize(extractJSONObject(stripMarkdownFences(raw_response)));
-
   let result = tryParse(cleaned, 'basic-sanitize');
   if (result.ok) return result.value;
 
+  // Pass 2: fix unescaped quotes and control chars
   const quoteFixed = fixUnescapedQuotesAndControls(cleaned);
   result = tryParse(quoteFixed, 'quote-fix');
   if (result.ok) return result.value;
 
+  // Pass 3: balance brackets
   const balanced = balanceBrackets(quoteFixed);
   result = tryParse(balanced, 'balance-brackets');
   if (result.ok) return result.value;
 
+  // Pass 4: re-run basicSanitize (re-strips trailing commas created by bracket balancing)
   const lastPass = basicSanitize(fixUnescapedQuotesAndControls(balanced));
   result = tryParse(lastPass, 'final-pass');
   if (result.ok) return result.value;
 
-  console.error(`[AI] ${label} JSON.parse failed after sanitization: ${result.error.message}`);
-  console.error(`[AI] ${label} raw_response (full):\n${raw_response}`);
+  // Pass 5: aggressive multi-pattern trailing comma strip → rebalance
+  const aggressiveCleaned = lastPass
+    .replace(/,\s*([}\]])/g, '$1')   // trailing commas before } or ]
+    .replace(/([{[,])\s*,/g, '$1')   // double commas
+    .replace(/,\s*,/g, ',');          // consecutive commas
+  const aggressiveBalanced = balanceBrackets(aggressiveCleaned);
+  result = tryParse(aggressiveBalanced, 'aggressive-pass');
+  if (result.ok) return result.value;
+
+  // All passes exhausted — log detailed diagnostics
+  console.error(`[AI] ${label} JSON.parse failed after all ${5} sanitization passes.`);
+  console.error(`[AI] ${label} Final parse error: ${result.error.message}`);
+  console.error(`[AI] ${label} Response length: ${raw_response.length} chars`);
+  console.error(`[AI] ${label} Response preview (first 500 chars):\n${raw_response.slice(0, 500)}`);
+  if (raw_response.length > 500) {
+    console.error(`[AI] ${label} Response tail (last 300 chars):\n${raw_response.slice(-300)}`);
+  }
 
   if (fallback && typeof fallback === 'object') {
-    console.warn(`[AI] ${label}: returning structured fallback JSON (_fallback: true)`);
+    console.warn(`[AI] ${label}: All parse passes failed — returning structured fallback JSON (_fallback: true)`);
     return { ...fallback };
   }
 

@@ -1463,10 +1463,15 @@
                     </div>
                 </div>
             </div>
-            <h3 class="font-headline-md text-headline-md text-on-surface mb-2 text-center" id="loader-text">Initializing
-                Dermal Topography Analysis...</h3>
-            <p class="font-body-sm text-body-sm text-on-surface-variant text-center">Extracting high-resolution dermal
-                layer biomarkers...</p>
+            <h3 class="font-headline-md text-headline-md text-on-surface mb-2 text-center" id="modal-dynamic-title">
+                Scanning Facial Topography...</h3>
+            <div id="modal-dynamic-subtext" class="flex items-center justify-center gap-2 h-8">
+                <span id="telemetry-icon-container"
+                    class="inline-flex items-center justify-center w-4 h-4 transition-opacity duration-500"></span>
+                <span id="telemetry-text"
+                    class="text-xs text-slate-600 font-medium transition-opacity duration-500">Extracting
+                    high-resolution dermal layer biomarkers...</span>
+            </div>
         </div>
     </div>
 
@@ -1723,6 +1728,14 @@
         }
 
         function closeModal() {
+            if (window.telemetryInterval) {
+                clearInterval(window.telemetryInterval);
+                window.telemetryInterval = null;
+            }
+            if (window.scanTextInterval) {
+                clearInterval(window.scanTextInterval);
+                window.scanTextInterval = null;
+            }
             modalOverlay.classList.add('hidden');
             authModal.classList.add('hidden');
             loaderModal.classList.add('hidden');
@@ -2234,8 +2247,62 @@
             }
 
             const loadingBanner = document.getElementById('ai-question-loading');
-            const loaderText = document.getElementById('loader-text');
-            if (loaderText) loaderText.innerText = 'Analyzing facial structure...';
+            const loaderText = document.getElementById('modal-dynamic-title');
+            if (loaderText) loaderText.innerText = 'Scanning Facial Topography...';
+
+            const telemetryIconEl = document.getElementById('telemetry-icon-container');
+            const telemetryTextEl = document.getElementById('telemetry-text');
+            if (telemetryTextEl) {
+                telemetryTextEl.innerText = 'Extracting high-resolution dermal layer biomarkers...';
+                telemetryTextEl.style.opacity = 1;
+            }
+            if (telemetryIconEl) {
+                telemetryIconEl.innerHTML = '';
+                telemetryIconEl.style.opacity = 1;
+            }
+
+            if (window.telemetryInterval) clearInterval(window.telemetryInterval);
+            if (window.scanTextInterval) clearInterval(window.scanTextInterval);
+
+            const usedPhrases = new Set();
+            const spinnerSvg = `<svg class="animate-spin w-4 h-4 text-slate-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>`;
+            const checkSvg = `<svg class="w-4 h-4 text-slate-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7" /></svg>`;
+
+            window.telemetryInterval = setInterval(() => {
+                const verbs = ["Measuring", "Mapping", "Evaluating", "Calculating", "Synthesizing", "Calibrating", "Analyzing", "Cross-referencing"];
+                const factors = ["epidermal melanin", "micro-vascular topography", "lipid barrier integrity", "localized erythema", "pore depth and density", "structural elasticity", "sebaceous distribution", "pigmentation contrast"];
+                const metrics = ["biomarkers", "index", "density", "profile", "variance", "symmetry", "gradients"];
+
+                let newPhrase = "";
+                let attempts = 0;
+                do {
+                    const verb = verbs[Math.floor(Math.random() * verbs.length)];
+                    const factor = factors[Math.floor(Math.random() * factors.length)];
+                    const metric = metrics[Math.floor(Math.random() * metrics.length)];
+                    newPhrase = `${verb} ${factor} ${metric}...`;
+                    attempts++;
+                } while (usedPhrases.has(newPhrase) && attempts < 50);
+
+                usedPhrases.add(newPhrase);
+
+                if (telemetryTextEl && telemetryIconEl) {
+                    telemetryTextEl.style.opacity = 0;
+                    telemetryIconEl.style.opacity = 0;
+                    setTimeout(() => {
+                        telemetryTextEl.innerText = newPhrase;
+                        telemetryIconEl.innerHTML = spinnerSvg;
+                        telemetryTextEl.style.opacity = 1;
+                        telemetryIconEl.style.opacity = 1;
+
+                        setTimeout(() => {
+                            if (window.telemetryInterval) {
+                                telemetryIconEl.innerHTML = checkSvg;
+                            }
+                        }, 800);
+                    }, 300);
+                }
+            }, 1500);
+
             modalOverlay.classList.remove('hidden');
             loaderModal.classList.remove('hidden');
 
