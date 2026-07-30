@@ -3252,11 +3252,12 @@
                       <h4 class="font-label-caps text-label-caps text-on-surface-variant mb-1">What it is</h4>
                       <p class="font-body-sm text-on-surface">${escHtml(w.what_it_is)}</p>
                     </div>
-                    <div class="grid grid-cols-2 gap-4">
+                    <div class="space-y-4">
                       <div>
                         <h4 class="font-label-caps text-label-caps text-on-surface-variant mb-1">Key Actives</h4>
                         <ul class="font-body-sm text-on-surface space-y-1">${(w.key_actives || []).map(a => `<li>• ${escHtml(a)}</li>`).join('')}</ul>
                       </div>
+                      <div class="border-t border-outline-variant/40"></div>
                       <div>
                         <h4 class="font-label-caps text-label-caps text-on-surface-variant mb-1">Key Benefits</h4>
                         <ul class="font-body-sm text-on-surface space-y-1">${(w.key_benefits || []).map(b => `<li>• ${escHtml(b)}</li>`).join('')}</ul>
