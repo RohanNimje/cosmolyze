@@ -209,6 +209,57 @@
             padding-bottom: 1rem;
         }
 
+        @keyframes winnerPulseHighlight {
+            0% {
+                box-shadow: 0 0 0 0 rgba(41, 105, 91, 0.28);
+            }
+
+            70% {
+                box-shadow: 0 0 0 10px rgba(41, 105, 91, 0);
+            }
+
+            100% {
+                box-shadow: 0 0 0 0 rgba(41, 105, 91, 0);
+            }
+        }
+
+        .winner-pulse-highlight {
+            animation: winnerPulseHighlight 1.2s ease-out 2;
+        }
+
+        #alternatives-grid {
+            -webkit-overflow-scrolling: touch;
+            scrollbar-width: none;
+            overscroll-behavior-x: contain;
+        }
+
+        #alternatives-grid::-webkit-scrollbar {
+            display: none;
+        }
+
+        .chemical-typewriter::after {
+            content: "";
+            display: inline-block;
+            width: 1px;
+            height: 1em;
+            margin-left: 2px;
+            background: #334155;
+            vertical-align: -2px;
+            animation: blinkCursor 1s steps(1) infinite;
+        }
+
+        @keyframes blinkCursor {
+            0%,
+            50% {
+                opacity: 1;
+            }
+
+            50.01%,
+            100% {
+                opacity: 0;
+            }
+        }
+
         /* ── Toast Notification System ─────────────────────────────────── */
         #toast-container {
             position: fixed;
@@ -1022,7 +1073,7 @@
                 <p class="font-body-sm text-on-surface-variant mb-5">Other products analysed against your clinical
                     profile.</p>
                 <div id="alternatives-grid"
-                    class="flex overflow-x-auto pb-4 snap-x snap-mandatory md:grid md:grid-cols-4 gap-4 -mx-margin-mobile px-margin-mobile md:mx-0 md:px-0"
+                    class="flex overflow-x-auto snap-x snap-mandatory gap-3 pb-4 scroll-smooth -mx-margin-mobile pl-margin-mobile pr-margin-mobile md:grid md:grid-cols-2 lg:grid-cols-4 md:gap-4 md:overflow-visible md:pb-0 md:items-stretch md:mx-0 md:px-0"
                     style="scrollbar-width:none;">
                     <!-- Injected by renderVerdictUI() -->
                 </div>
@@ -1475,6 +1526,23 @@
         </div>
     </div>
 
+    <!-- Chemical Audit Modal -->
+    <div id="chemical-audit-modal"
+        class="fixed inset-0 hidden z-[120] bg-slate-900/60 backdrop-blur-sm items-center justify-center p-4">
+        <div class="bg-white border border-slate-200 shadow-2xl rounded-2xl p-6 max-w-lg w-full mx-4 relative">
+            <button type="button" id="chemical-audit-close-btn"
+                class="absolute right-4 top-4 text-slate-500 hover:text-slate-700 transition-colors text-xl leading-none font-light"
+                aria-label="Close chemical risk modal">X</button>
+            <h3 id="chemical-audit-title" class="text-lg font-semibold text-slate-900 pr-8 mb-3">
+                Chemical Risk Scan
+            </h3>
+            <div
+                class="bg-slate-50 border border-slate-200 rounded-xl p-4 min-h-[140px] text-[13px] leading-relaxed text-slate-700">
+                <p id="chemical-audit-typing-target" class="typing-target chemical-typewriter whitespace-pre-line"></p>
+            </div>
+        </div>
+    </div>
+
     <!-- Side NavBar Desktop (Restored Help & Logout) -->
     <aside
         class="bg-surface dark:bg-surface-container-lowest font-body-sm text-body-sm border-r border-outline-variant/30 dark:border-outline/20 flat no shadows hidden lg:flex flex-col fixed left-0 top-16 h-[calc(100vh-64px)] p-md w-64 z-40">
@@ -1662,6 +1730,80 @@
         const authModal = document.getElementById('auth-modal');
         const loaderModal = document.getElementById('loader-modal');
         const settingsOverlay = document.getElementById('settings-modal-overlay');
+        const chemicalAuditModal = document.getElementById('chemical-audit-modal');
+        const chemicalAuditTitle = document.getElementById('chemical-audit-title');
+        const chemicalAuditTypingTarget = document.getElementById('chemical-audit-typing-target');
+        let chemicalTypewriterTimer = null;
+
+        function stopChemicalTypewriter() {
+            if (chemicalTypewriterTimer) {
+                clearTimeout(chemicalTypewriterTimer);
+                chemicalTypewriterTimer = null;
+            }
+        }
+
+        function closeChemicalAuditModal() {
+            if (!chemicalAuditModal) return;
+            stopChemicalTypewriter();
+            if (chemicalAuditTypingTarget) {
+                chemicalAuditTypingTarget.textContent = '';
+                chemicalAuditTypingTarget.classList.remove('chemical-typewriter');
+            }
+            chemicalAuditModal.classList.add('hidden');
+            chemicalAuditModal.classList.remove('flex');
+        }
+
+        function runChemicalTypewriter(text, speedMs = 25) {
+            if (!chemicalAuditTypingTarget) return;
+            stopChemicalTypewriter();
+            const source = String(text || 'Detailed chemical risk scan is currently unavailable for this product.').trim();
+            chemicalAuditTypingTarget.textContent = '';
+            chemicalAuditTypingTarget.classList.add('chemical-typewriter');
+            let idx = 0;
+            const tick = () => {
+                chemicalAuditTypingTarget.textContent = source.slice(0, idx);
+                idx += 1;
+                if (idx <= source.length) {
+                    chemicalTypewriterTimer = setTimeout(tick, speedMs);
+                    return;
+                }
+                chemicalAuditTypingTarget.classList.remove('chemical-typewriter');
+                chemicalTypewriterTimer = null;
+            };
+            tick();
+        }
+
+        function openChemicalAuditModal(productTitle, chemicalRiskBreakdown) {
+            if (!chemicalAuditModal) return;
+            const label = productTitle ? `${productTitle} - Chemical Risk Scan` : 'Chemical Risk Scan';
+            if (chemicalAuditTitle) chemicalAuditTitle.textContent = label;
+            chemicalAuditModal.classList.remove('hidden');
+            chemicalAuditModal.classList.add('flex');
+            runChemicalTypewriter(chemicalRiskBreakdown, 25);
+        }
+
+        function focusWinnerCard() {
+            const winnerCard = document.getElementById('winner-card');
+            if (!winnerCard) return;
+            winnerCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            winnerCard.classList.remove('winner-pulse-highlight');
+            void winnerCard.offsetWidth;
+            winnerCard.classList.add('winner-pulse-highlight');
+            setTimeout(() => winnerCard.classList.remove('winner-pulse-highlight'), 2500);
+        }
+
+        if (chemicalAuditModal) {
+            const closeBtn = document.getElementById('chemical-audit-close-btn');
+            if (closeBtn) closeBtn.addEventListener('click', closeChemicalAuditModal);
+            chemicalAuditModal.addEventListener('click', (event) => {
+                if (event.target === chemicalAuditModal) closeChemicalAuditModal();
+            });
+            document.addEventListener('keydown', (event) => {
+                if (event.key === 'Escape' && !chemicalAuditModal.classList.contains('hidden')) {
+                    closeChemicalAuditModal();
+                }
+            });
+        }
 
         // ── Toast System ──
         const TOAST_ICONS = { success: 'check_circle', error: 'error', warning: 'warning' };
@@ -3050,12 +3192,15 @@
             });
         }
 
-        // ── SVG Warning Triangle (inline, no icon font dependency) ───────────
+        // ── Inline SVGs (no icon font / emoji dependency) ────────────────────
         const SVG_WARN = `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg" style="flex-shrink:0;display:inline-block;vertical-align:-2px;">
             <path d="M7 1L13 12H1L7 1Z" fill="#fee2e2" stroke="#ef4444" stroke-width="1.2" stroke-linejoin="round"/>
             <rect x="6.4" y="5" width="1.2" height="3.5" rx="0.5" fill="#ef4444"/>
             <circle cx="7" cy="10" r="0.7" fill="#ef4444"/>
         </svg>`;
+        const SVG_SCAN_SHIELD = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/></svg>`;
+        const SVG_ARROW_UP_RIGHT = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 17L17 7"/><path d="M7 7h10v10"/></svg>`;
+        const SVG_SHOPPING_BAG = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 2L3 6v14a2 2 0 002 2h14a2 2 0 002-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 01-8 0"/></svg>`;
 
         // Last rendered verdict — used by bookmark / shelf save
         let lastVerdictData = null;
@@ -3144,67 +3289,88 @@
             // ── Alternative Cards ────────────────────────────────────────────
             altGrid.innerHTML = '';
             (alts || []).forEach((alt, i) => {
-                const hasSensitizer = alt.detected_sensitizer && alt.detected_sensitizer !== 'null';
-                const statusColor = alt.match_status === 'avoid'
-                    ? { btn: 'text-red-600 border-red-300 bg-red-50 dark:bg-red-900/20 hover:bg-red-100', drawer: 'bg-red-50 border-l-4 border-red-500 text-red-900 dark:bg-red-950/40 dark:text-red-200' }
-                    : alt.match_status === 'neutral'
-                        ? { btn: 'text-amber-600 border-amber-300 bg-amber-50 dark:bg-amber-900/20 hover:bg-amber-100', drawer: 'bg-amber-50 border-l-4 border-amber-400 text-amber-900 dark:bg-amber-950/40 dark:text-amber-200' }
-                        : { btn: 'text-emerald-600 border-emerald-300 bg-emerald-50 dark:bg-emerald-900/20 hover:bg-emerald-100', drawer: 'bg-emerald-50 border-l-4 border-emerald-500 text-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200' };
+                const riskLevel = alt.riskLevel || (
+                    alt.match_status === 'avoid' ? 'High Irritation Risk'
+                        : alt.match_status === 'neutral' ? 'Moderate Risk'
+                            : 'Low Risk'
+                );
+                const matchPercentage = alt.matchPercentage || `${alt.clinical_match_pct || 70}%`;
+                const safetyNotice = alt.safetyNotice || alt.medical_alert || 'Patch test first and monitor for irritation if your barrier is currently compromised.';
+                const chemicalRiskBreakdown = alt.chemicalRiskBreakdown || 'Active Concentration Impact: Not provided.\nFormula pH Level: Not provided.\nBarrier Risk Trigger: Not provided.';
+                const safeIngredients = Array.isArray(alt.safeIngredients) && alt.safeIngredients.length
+                    ? alt.safeIngredients.slice(0, 3)
+                    : (alt.optimal_active ? [alt.optimal_active] : []);
+                const flaggedIngredients = Array.isArray(alt.flaggedIngredients) && alt.flaggedIngredients.length
+                    ? alt.flaggedIngredients.slice(0, 3)
+                    : (alt.detected_sensitizer && alt.detected_sensitizer !== 'null' ? [alt.detected_sensitizer] : []);
 
-                const alertBtnLabel = 'View Medical Alert';
-                const alertDrawerId = `alert-drawer-${i}`;
+                // Combine safe + flagged, then sort shortest → longest before rendering
+                const sortedIngredients = [
+                    ...safeIngredients.map((name) => ({ name: String(name), type: 'safe' })),
+                    ...flaggedIngredients.map((name) => ({ name: String(name), type: 'flagged' })),
+                ].sort((a, b) => a.name.length - b.name.length);
 
                 const card = document.createElement('div');
-                card.className = 'snap-start flex-shrink-0 w-[85vw] md:w-auto bg-surface-container-lowest dark:bg-surface-container border border-outline-variant dark:border-outline/30 rounded-xl overflow-hidden flex flex-col shadow-sm';
+                card.className = 'w-[82vw] max-w-[82vw] min-w-0 shrink-0 snap-start md:w-full md:max-w-none h-full flex flex-col justify-between border border-slate-200 rounded-2xl bg-white overflow-hidden shadow-sm';
                 card.innerHTML = `
-                  <div id="alt-product-frame-${i}"
-                    class="h-36 bg-surface-container-low flex items-center justify-center p-4 overflow-hidden shimmer-loading">
-                    <img id="alt-product-img-${i}"
-                      src=""
-                      alt="${escHtml(alt.product_name || 'Product')}"
-                      class="h-full w-full object-contain product-img-fade"
-                      onerror="handleImgError(this)" />
+                  <div class="min-w-0 overflow-hidden">
+                    <div id="alt-product-frame-${i}"
+                      class="h-36 bg-slate-50 flex items-center justify-center p-4 overflow-hidden shimmer-loading">
+                      <img id="alt-product-img-${i}"
+                        src=""
+                        alt="${escHtml(alt.product_name || 'Product')}"
+                        class="h-full w-full object-contain product-img-fade"
+                        onerror="handleImgError(this)" />
+                    </div>
+                    <div class="p-4 space-y-2 min-w-0">
+                      <h4 class="font-semibold text-slate-900 text-sm leading-snug break-words">${escHtml(alt.product_name)}</h4>
+                      <p class="text-xs text-slate-500 break-words">${escHtml(alt.brand)}</p>
+                      <div class="font-semibold text-slate-900 text-sm">₹${alt.price_inr}</div>
+                      <div class="flex flex-wrap items-center gap-1.5">
+                        <span class="w-auto text-[11px] font-semibold text-slate-800 bg-slate-100 border border-slate-200/70 px-2 py-1 rounded-md">${escHtml(matchPercentage)} Match</span>
+                        <span class="w-auto text-[11px] font-semibold text-slate-800 bg-slate-100 border border-slate-200/70 px-2 py-1 rounded-md break-words">${escHtml(riskLevel)}</span>
+                      </div>
+                      <p class="text-xs text-slate-700 leading-relaxed break-words">${escHtml(alt.clinicalEvaluation || alt.medical_alert || 'Clinical evaluation not available.')}</p>
+                      <div class="bg-amber-50/40 border border-amber-200/50 text-slate-800 rounded-lg px-3 py-2 min-w-0">
+                        <p class="text-[11px] font-semibold uppercase tracking-wide text-slate-700 mb-1">Safety Audit Notice</p>
+                        <p class="text-xs leading-relaxed break-words">${escHtml(safetyNotice)}</p>
+                      </div>
+                      ${sortedIngredients.length ? `<div class="flex flex-wrap gap-1.5 my-2 items-center">${sortedIngredients.map((item) => item.type === 'safe'
+                    ? `<span class="w-auto inline-flex items-center text-[11px] font-medium text-slate-700 bg-emerald-50/70 border border-emerald-200/60 px-2.5 py-1 rounded-md whitespace-nowrap"><span class="w-1.5 h-1.5 rounded-full bg-emerald-500 mr-1.5"></span>${escHtml(item.name)}</span>`
+                    : `<span class="w-auto inline-flex items-center text-[11px] font-medium text-slate-700 bg-slate-100 border border-slate-200/80 px-2.5 py-1 rounded-md whitespace-nowrap"><span class="w-1.5 h-1.5 rounded-full bg-amber-500 mr-1.5"></span>${escHtml(item.name)}</span>`
+                ).join('')}</div>` : ''}
+                    </div>
                   </div>
-                  <div class="p-4 flex flex-col flex-grow gap-2">
-                    <h4 class="font-semibold text-on-surface text-sm leading-snug">${escHtml(alt.product_name)}</h4>
-                    <p class="text-xs text-on-surface-variant">${escHtml(alt.brand)}</p>
-                    <div class="font-semibold text-on-surface text-sm">₹${alt.price_inr}</div>
 
-                    <!-- Optimal Active: muted mono text, NO icon -->
-                    <div class="mt-1">
-                      <span class="font-label-caps text-label-caps text-on-surface-variant" style="font-size:10px;letter-spacing:.06em;">OPTIMAL ACTIVE</span>
-                      <p class="font-mono text-xs text-on-surface-variant mt-0.5 leading-snug">${escHtml(alt.optimal_active || '—')}</p>
-                    </div>
-
-                    <!-- Detected Sensitizer: SVG triangle only, no icon font -->
-                    ${hasSensitizer ? `
-                    <div class="flex items-start gap-1.5 mt-1">
-                      ${SVG_WARN}
-                      <div>
-                        <span class="font-label-caps text-label-caps" style="font-size:10px;letter-spacing:.06em;color:#dc2626;">DETECTED SENSITIZER</span>
-                        <p class="text-xs text-red-600 dark:text-red-400 font-medium leading-snug">${escHtml(alt.detected_sensitizer)}</p>
-                      </div>
-                    </div>` : ''}
-
-                    <!-- Medical Alert accordion -->
-                    <div class="mt-auto pt-2">
-                      <button
-                        class="w-full flex items-center justify-between px-3 py-2 rounded border text-xs font-semibold transition-colors ${statusColor.btn}"
-                        onclick="document.getElementById('${alertDrawerId}').classList.toggle('drawer-expanded')">
-                        <span>${alertBtnLabel}</span>
-                        <span class="material-symbols-outlined" style="font-size:16px;">expand_more</span>
-                      </button>
-                      <div id="${alertDrawerId}" class="drawer-content ${statusColor.drawer} rounded-b px-3 text-xs leading-relaxed">
-                        ${escHtml(alt.medical_alert || 'No specific alerts.')}
-                      </div>
-                    </div>
-
+                  <div class="mt-auto pt-3 px-4 pb-4 flex flex-col gap-2 min-w-0">
+                    <button type="button"
+                      class="js-chemical-scan-btn w-full py-2.5 text-xs font-semibold text-slate-700 bg-white hover:bg-slate-50 border border-slate-200 rounded-lg flex items-center justify-center gap-2 transform transition-all duration-200 hover:scale-[1.02] hover:shadow-sm active:scale-95 cursor-pointer">
+                      ${SVG_SCAN_SHIELD}
+                      <span>View Chemical Scan</span>
+                    </button>
+                    <button type="button"
+                      class="js-view-top-pick-btn w-full py-2.5 text-xs font-semibold text-slate-700 bg-white hover:bg-slate-50 border border-slate-200 rounded-lg flex items-center justify-center gap-2 transform transition-all duration-200 hover:scale-[1.02] hover:shadow-sm active:scale-95 cursor-pointer">
+                      ${SVG_ARROW_UP_RIGHT}
+                      <span>View Top Pick</span>
+                    </button>
                     <a href="${escHtml(alt.amazon_url || '#')}" target="_blank" rel="noopener"
-                      class="w-full bg-surface-container-highest hover:bg-outline-variant text-on-surface py-2 rounded font-label-caps text-xs transition-colors text-center mt-1 no-underline">
-                      🛒 Buy Now
+                      class="w-full py-2.5 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 border border-slate-900 rounded-lg flex items-center justify-center gap-2 transform transition-all duration-200 hover:scale-[1.02] hover:shadow-md active:scale-95 cursor-pointer no-underline">
+                      ${SVG_SHOPPING_BAG}
+                      <span>Buy Now</span>
                     </a>
                   </div>`;
                 altGrid.appendChild(card);
+
+                const scanBtn = card.querySelector('.js-chemical-scan-btn');
+                if (scanBtn) {
+                    scanBtn.addEventListener('click', () => {
+                        openChemicalAuditModal(alt.product_name || 'Selected Product', chemicalRiskBreakdown);
+                    });
+                }
+                const topPickBtn = card.querySelector('.js-view-top-pick-btn');
+                if (topPickBtn) {
+                    topPickBtn.addEventListener('click', focusWinnerCard);
+                }
             });
 
             altSection.classList.remove('hidden');

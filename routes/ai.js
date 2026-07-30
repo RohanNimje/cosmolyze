@@ -522,11 +522,11 @@ async function runTripleFailover(label, tiers) {
       if (tier.validate && !tier.validate(result)) {
         throw new Error(`${tier.name} returned an empty or invalid payload`);
       }
-      console.log(`[AI] ${tier.name} âœ“ succeeded`);
+      console.log(`[AI] ${tier.name} [SUCCESS] succeeded`);
       return result;
     } catch (err) {
       lastError = err;
-      console.warn(`[AI] ${tier.name} âœ— failed â€” ${err.message}`);
+      console.warn(`[AI] ${tier.name} [FAILED] failed - ${err.message}`);
       // Continue silently to next tier
     }
   }
@@ -1106,7 +1106,7 @@ Using ONLY the Stage 1 report, questionnaire answers, and budget above (no image
     const groqModel = groqTextModels[0] || env('GROQ_TEXT_MODEL') || 'llama-3.3-70b-versatile';
     const groqKey = keys.groqNew || keys.groq;
 
-    console.log('[AI] generate-verdict: Stage 2 dynamic multi-provider cascade (text-only), budget â‚¹', budgetMin, 'â€“', budgetMax);
+    console.log('[AI] generate-verdict: Stage 2 dynamic multi-provider cascade (text-only), budget INR', budgetMin, '-', budgetMax);
     console.log(`[AI] Text models â€” Gemini: [${effectiveGeminiModels}] | OR: [${orTextModels}] | Groq fallback: ${groqModel}`);
 
     // â”€â”€ Build the ordered tier list â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
