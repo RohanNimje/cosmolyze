@@ -3255,12 +3255,12 @@
                     <div class="space-y-4">
                       <div>
                         <h4 class="font-label-caps text-label-caps text-on-surface-variant mb-1">Key Actives</h4>
-                        <ul class="font-body-sm text-on-surface space-y-1">${(w.key_actives || []).map(a => `<li>• ${escHtml(a)}</li>`).join('')}</ul>
+                        <ul class="font-body-sm text-on-surface space-y-1">${(w.key_actives || []).map(a => `<li class="flex gap-2"><span class="flex-shrink-0 select-none">•</span><span class="min-w-0">${escHtml(a)}</span></li>`).join('')}</ul>
                       </div>
                       <div class="border-t border-outline-variant/40"></div>
                       <div>
                         <h4 class="font-label-caps text-label-caps text-on-surface-variant mb-1">Key Benefits</h4>
-                        <ul class="font-body-sm text-on-surface space-y-1">${(w.key_benefits || []).map(b => `<li>• ${escHtml(b)}</li>`).join('')}</ul>
+                        <ul class="font-body-sm text-on-surface space-y-1">${(w.key_benefits || []).map(b => `<li class="flex gap-2"><span class="flex-shrink-0 select-none">•</span><span class="min-w-0">${escHtml(b)}</span></li>`).join('')}</ul>
                       </div>
                     </div>
                     <div class="bg-surface-container dark:bg-tertiary-container rounded-lg p-4 border-l-4 border-primary">
