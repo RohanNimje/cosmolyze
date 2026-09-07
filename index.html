@@ -1714,6 +1714,94 @@
         </div>
     </div>
 
+    <!-- Desktop Live Webcam Modal -->
+    <div id="webcam-modal-overlay"
+        class="fixed inset-0 bg-inverse-surface/75 backdrop-blur-md z-[115] hidden flex items-center justify-center p-4 transition-opacity duration-300"
+        onclick="if(event.target === this) closeWebcamModal();">
+        <div class="bg-surface-container-lowest dark:bg-surface-container border border-outline-variant/40 dark:border-outline/30 rounded-2xl w-full max-w-lg shadow-2xl overflow-hidden relative flex flex-col fade-in">
+            
+            <!-- Modal Header -->
+            <div class="flex items-center justify-between px-5 py-3.5 border-b border-outline-variant/30 bg-surface-container-low/60 dark:bg-surface-container-highest/20">
+                <div class="flex items-center gap-2.5">
+                    <span class="material-symbols-outlined text-primary dark:text-primary-fixed text-2xl" data-icon="photo_camera">photo_camera</span>
+                    <div>
+                        <h3 class="font-headline-md text-sm font-semibold text-on-surface leading-tight">Live Device Camera</h3>
+                        <p class="text-[11px] text-on-surface-variant">Position your face in the center of the frame</p>
+                    </div>
+                </div>
+                <button type="button"
+                    class="text-on-surface-variant hover:text-on-surface transition-colors rounded-full p-1 hover:bg-surface-container-high"
+                    onclick="closeWebcamModal()" aria-label="Close webcam modal">
+                    <span class="material-symbols-outlined text-lg" data-icon="close">close</span>
+                </button>
+            </div>
+
+            <!-- Video Viewport Area -->
+            <div class="relative bg-black w-full aspect-[4/3] flex items-center justify-center overflow-hidden">
+                <!-- Video element (Mirrored for natural preview) -->
+                <video id="webcam-video" autoplay playsinline muted class="w-full h-full object-cover scale-x-[-1]"></video>
+                
+                <!-- Face Alignment Overlay Guide -->
+                <div id="webcam-face-guide" class="pointer-events-none absolute inset-0 flex items-center justify-center">
+                    <div class="w-44 h-60 sm:w-52 sm:h-68 rounded-[50%] border-2 border-dashed border-emerald-400/60 shadow-[0_0_20px_rgba(0,0,0,0.4)] flex items-center justify-center relative">
+                        <div class="absolute -top-3 bg-surface-container-lowest/90 dark:bg-surface-container/90 text-primary dark:text-primary-fixed px-2.5 py-0.5 rounded-full text-[10px] font-semibold border border-primary/30 shadow-sm backdrop-blur-sm">
+                            Center Face Here
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Camera Loading Spinner -->
+                <div id="webcam-spinner" class="absolute inset-0 bg-black/80 flex flex-col items-center justify-center text-white gap-3 z-10">
+                    <span class="material-symbols-outlined text-4xl text-primary-fixed animate-spin">progress_activity</span>
+                    <p class="text-xs font-medium text-slate-200">Connecting to webcam...</p>
+                </div>
+
+                <!-- Camera Error Display -->
+                <div id="webcam-error" class="hidden absolute inset-0 bg-surface-container-lowest dark:bg-surface-container p-6 flex flex-col items-center justify-center text-center z-20">
+                    <div class="w-12 h-12 rounded-full bg-error/10 text-error flex items-center justify-center mb-3">
+                        <span class="material-symbols-outlined text-2xl">videocam_off</span>
+                    </div>
+                    <h4 class="font-semibold text-on-surface mb-1 text-sm">Camera Unavailable</h4>
+                    <p id="webcam-error-msg" class="text-xs text-on-surface-variant max-w-xs mb-4">
+                        Unable to access your device camera. Please grant camera permissions or use file upload.
+                    </p>
+                    <div class="flex gap-2">
+                        <button type="button" onclick="startWebcamStream()" class="px-3 py-1.5 bg-surface-container-high text-on-surface rounded-lg text-xs font-semibold hover:bg-surface-variant flex items-center gap-1.5 transition-all">
+                            <span class="material-symbols-outlined text-sm">refresh</span> Try Again
+                        </button>
+                        <button type="button" onclick="closeWebcamModal(); document.getElementById('camera-input').click();" class="px-3 py-1.5 bg-primary text-on-primary rounded-lg text-xs font-semibold hover:opacity-90 flex items-center gap-1.5 transition-all">
+                            <span class="material-symbols-outlined text-sm">folder_open</span> Choose File
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Flash animation -->
+                <div id="webcam-flash" class="absolute inset-0 bg-white pointer-events-none opacity-0 transition-opacity duration-150 z-30"></div>
+            </div>
+
+            <!-- Modal Footer Controls -->
+            <div class="p-3.5 sm:px-5 bg-surface-container-low/50 dark:bg-surface-container-highest/10 flex items-center justify-between border-t border-outline-variant/30">
+                <button type="button" id="webcam-switch-btn" onclick="switchWebcamDevice()"
+                    class="hidden text-on-surface-variant hover:text-on-surface px-2.5 py-1.5 rounded-lg text-xs font-medium hover:bg-surface-container-high transition-all flex items-center gap-1.5"
+                    title="Switch camera device">
+                    <span class="material-symbols-outlined text-base">cameraswitch</span>
+                    <span class="hidden sm:inline">Switch Camera</span>
+                </button>
+                <div class="flex-1 flex items-center justify-center">
+                    <button type="button" id="webcam-capture-btn" onclick="captureWebcamPhoto()"
+                        class="bg-primary text-on-primary hover:opacity-95 active:scale-95 transition-all px-6 py-2.5 rounded-full font-label-caps text-label-caps text-xs font-semibold shadow-lg hover:shadow-primary/30 flex items-center gap-2">
+                        <span class="material-symbols-outlined text-base" data-icon="photo_camera">photo_camera</span>
+                        <span>Capture Photo</span>
+                    </button>
+                </div>
+                <button type="button" onclick="closeWebcamModal()"
+                    class="text-on-surface-variant hover:text-on-surface px-2.5 py-1.5 rounded-lg text-xs font-medium hover:bg-surface-container-high transition-all">
+                    Cancel
+                </button>
+            </div>
+        </div>
+    </div>
+
     <!-- ── Hidden File Inputs (Camera & Gallery) ── -->
     <input type="file" id="camera-input" accept="image/*" capture="environment" style="display:none;" />
     <input type="file" id="gallery-input" accept="image/*" style="display:none;" />
@@ -1887,8 +1975,8 @@
             const intent = sessionStorage.getItem('postLoginIntent');
             if (intent && localStorage.getItem('token')) {
                 sessionStorage.removeItem('postLoginIntent');
-                if (intent === 'camera') document.getElementById('camera-input').click();
-                else if (intent === 'gallery') document.getElementById('gallery-input').click();
+                if (intent === 'camera') triggerCamera();
+                else if (intent === 'gallery') triggerGallery();
             }
         }
 
@@ -2282,14 +2370,203 @@
             return canvas.toDataURL('image/jpeg', 0.8);
         }
 
+        // ══════════════════════════════════════════════════════════════════════
+        //  LIVE DESKTOP WEBCAM STREAM & CAPTURE MODULE
+        // ══════════════════════════════════════════════════════════════════════
+
+        let webcamStream = null;
+        let currentWebcamDeviceId = null;
+        let availableWebcamDevices = [];
+
+        /**
+         * Detect if running on a mobile OS / device where native camera capture is optimal.
+         */
+        function isMobileDevice() {
+            const ua = (navigator.userAgent || navigator.vendor || window.opera || '').toLowerCase();
+            const mobileRegex = /(android|webos|iphone|ipad|ipod|blackberry|windows phone|iemobile|opera mini|mobile|crios)/i;
+            if (mobileRegex.test(ua)) return true;
+            // iPadOS on desktop Safari mode
+            if (navigator.maxTouchPoints && navigator.maxTouchPoints > 2 && /macintosh/i.test(ua)) {
+                return true;
+            }
+            return false;
+        }
+
+        /**
+         * Main camera trigger — on mobile opens native camera picker,
+         * on desktop/laptop activates live webcam modal with video stream.
+         */
         function triggerCamera() {
             if (localStorage.getItem('token')) {
-                document.getElementById('camera-input').click();
+                if (isMobileDevice() || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                    document.getElementById('camera-input').click();
+                } else {
+                    openWebcamModal();
+                }
             } else {
                 sessionStorage.setItem('postLoginIntent', 'camera');
                 openAuthModal();
             }
         }
+
+        async function openWebcamModal() {
+            const overlay = document.getElementById('webcam-modal-overlay');
+            if (!overlay) {
+                document.getElementById('camera-input').click();
+                return;
+            }
+            overlay.classList.remove('hidden');
+            await startWebcamStream();
+        }
+
+        function closeWebcamModal() {
+            stopWebcamStream();
+            const overlay = document.getElementById('webcam-modal-overlay');
+            if (overlay) {
+                overlay.classList.add('hidden');
+            }
+        }
+
+        function stopWebcamStream() {
+            if (webcamStream) {
+                webcamStream.getTracks().forEach(track => {
+                    try { track.stop(); } catch (e) { }
+                });
+                webcamStream = null;
+            }
+            const video = document.getElementById('webcam-video');
+            if (video) {
+                video.srcObject = null;
+            }
+        }
+
+        async function startWebcamStream(deviceId = null) {
+            stopWebcamStream();
+            const video = document.getElementById('webcam-video');
+            const errorEl = document.getElementById('webcam-error');
+            const spinner = document.getElementById('webcam-spinner');
+
+            if (errorEl) errorEl.classList.add('hidden');
+            if (spinner) spinner.classList.remove('hidden');
+
+            const constraints = {
+                video: {
+                    width: { ideal: 1280 },
+                    height: { ideal: 720 },
+                    facingMode: 'user',
+                    ...(deviceId ? { deviceId: { exact: deviceId } } : {})
+                },
+                audio: false
+            };
+
+            try {
+                webcamStream = await navigator.mediaDevices.getUserMedia(constraints);
+                if (video) {
+                    video.srcObject = webcamStream;
+                    await video.play();
+                }
+                if (spinner) spinner.classList.add('hidden');
+                currentWebcamDeviceId = deviceId;
+                await enumerateWebcamDevices();
+            } catch (err) {
+                console.warn('[Webcam] Access failed:', err);
+                if (spinner) spinner.classList.add('hidden');
+                if (errorEl) {
+                    errorEl.classList.remove('hidden');
+                    const errorMsg = document.getElementById('webcam-error-msg');
+                    if (errorMsg) {
+                        if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+                            errorMsg.textContent = 'Camera permission was denied. Please allow camera access in browser settings or use file upload.';
+                        } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
+                            errorMsg.textContent = 'No camera device found on this laptop/desktop.';
+                        } else {
+                            errorMsg.textContent = 'Unable to access device webcam (' + (err.message || 'Error') + ').';
+                        }
+                    }
+                }
+            }
+        }
+
+        async function enumerateWebcamDevices() {
+            if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return;
+            try {
+                const devices = await navigator.mediaDevices.enumerateDevices();
+                availableWebcamDevices = devices.filter(d => d.kind === 'videoinput');
+                const switchBtn = document.getElementById('webcam-switch-btn');
+                if (switchBtn) {
+                    if (availableWebcamDevices.length > 1) {
+                        switchBtn.classList.remove('hidden');
+                    } else {
+                        switchBtn.classList.add('hidden');
+                    }
+                }
+            } catch (e) {
+                console.warn('[Webcam] Device enumeration note:', e);
+            }
+        }
+
+        function switchWebcamDevice() {
+            if (availableWebcamDevices.length < 2) return;
+            const currentTrack = webcamStream?.getVideoTracks()[0];
+            const currentSettings = currentTrack?.getSettings();
+            const currentId = currentSettings?.deviceId || currentWebcamDeviceId;
+
+            const currentIndex = availableWebcamDevices.findIndex(d => d.deviceId === currentId);
+            const nextIndex = (currentIndex + 1) % availableWebcamDevices.length;
+            startWebcamStream(availableWebcamDevices[nextIndex].deviceId);
+        }
+
+        function captureWebcamPhoto() {
+            const video = document.getElementById('webcam-video');
+            if (!video || !webcamStream) {
+                showToast('Webcam not active. Please check permissions.', 'error');
+                return;
+            }
+
+            const videoW = video.videoWidth || 1280;
+            const videoH = video.videoHeight || 720;
+
+            const canvas = document.createElement('canvas');
+            canvas.width = videoW;
+            canvas.height = videoH;
+            const ctx = canvas.getContext('2d');
+
+            // Draw frame matching the mirrored live user preview
+            ctx.translate(videoW, 0);
+            ctx.scale(-1, 1);
+            ctx.drawImage(video, 0, 0, videoW, videoH);
+
+            // Trigger shutter flash visual
+            const flashOverlay = document.getElementById('webcam-flash');
+            if (flashOverlay) {
+                flashOverlay.classList.remove('opacity-0');
+                flashOverlay.classList.add('opacity-90');
+                setTimeout(() => {
+                    flashOverlay.classList.remove('opacity-90');
+                    flashOverlay.classList.add('opacity-0');
+                }, 120);
+            }
+
+            canvas.toBlob(blob => {
+                if (!blob) {
+                    showToast('Failed to capture photo from webcam.', 'error');
+                    return;
+                }
+                const file = new File([blob], 'webcam-capture-' + Date.now() + '.jpg', { type: 'image/jpeg' });
+                closeWebcamModal();
+                handleFileSelected(file);
+            }, 'image/jpeg', 0.95);
+        }
+
+        // Close webcam on ESC key
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                const webcamOverlay = document.getElementById('webcam-modal-overlay');
+                if (webcamOverlay && !webcamOverlay.classList.contains('hidden')) {
+                    closeWebcamModal();
+                }
+            }
+        });
 
         function triggerGallery() {
             if (localStorage.getItem('token')) {
