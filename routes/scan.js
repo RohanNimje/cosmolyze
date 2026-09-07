@@ -122,6 +122,9 @@ function isDummyCachedImage(imageUrl) {
   );
 }
 
+// ── Shared constants ─────────────────────────────────────────────────────────
+const COSMOLYZE_UA = 'Cosmolyze - Production Engine';
+
 const DDG_HEADERS = {
   'User-Agent':
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
@@ -130,6 +133,128 @@ const DDG_HEADERS = {
   Referer: 'https://duckduckgo.com/',
 };
 
+// ── TIER 1: Open Beauty Facts ─────────────────────────────────────────────────
+/**
+ * Query world.openbeautyfacts.org for a product image.
+ * Uses the public JSON search endpoint — no API key required.
+ *
+ * @param {string} productName — normalised (trim + lowercase)
+ * @returns {Promise<string|null>} — live image URL or null
+ */
+async function fetchImageFromOpenBeautyFacts(productName) {
+  try {
+    const url =
+      `https://world.openbeautyfacts.org/cgi/search.pl` +
+      `?search_terms=${encodeURIComponent(productName)}` +
+      `&search_simple=1` +
+      `&action=process` +
+      `&json=1` +
+      `&page_size=5` +
+      `&fields=image_front_url,image_url,product_name`;
+
+    console.log(`[Scan][T1] OpenBeautyFacts lookup for: "${productName}"`);
+
+    const res = await fetch(url, {
+      method: 'GET',
+      headers: { 'User-Agent': COSMOLYZE_UA, Accept: 'application/json' },
+      signal: AbortSignal.timeout(8000),
+    });
+
+    if (!res.ok) {
+      console.warn(`[Scan][T1] OpenBeautyFacts returned HTTP ${res.status}`);
+      return null;
+    }
+
+    const data = await res.json().catch(() => null);
+    const products = Array.isArray(data?.products) ? data.products : [];
+
+    for (const p of products) {
+      const candidate = p?.image_front_url || p?.image_url;
+      if (typeof candidate === 'string' && /^https?:\/\//i.test(candidate)) {
+        console.log(`[Scan][T1] OpenBeautyFacts image found for: "${productName}"`);
+        return candidate;
+      }
+    }
+
+    console.warn(`[Scan][T1] OpenBeautyFacts — no usable image for: "${productName}"`);
+    return null;
+  } catch (err) {
+    console.warn(`[Scan][T1] OpenBeautyFacts error: ${err.message}`);
+    return null;
+  }
+}
+
+// ── TIER 2: Wikimedia Commons ─────────────────────────────────────────────────
+/**
+ * Query the Wikimedia Commons API for a public image matching the product name.
+ * Uses the generator=search + iiprop=url approach — no API key required.
+ *
+ * @param {string} productName — normalised (trim + lowercase)
+ * @returns {Promise<string|null>} — live image URL or null
+ */
+async function fetchImageFromWikimedia(productName) {
+  try {
+    // Target: high-quality cosmetic product photos hosted on Commons
+    const searchQuery = `${productName} cosmetic product`;
+    const url =
+      `https://commons.wikimedia.org/w/api.php` +
+      `?action=query` +
+      `&generator=search` +
+      `&gsrnamespace=6` +
+      `&gsrsearch=${encodeURIComponent(searchQuery)}` +
+      `&gsrlimit=5` +
+      `&prop=imageinfo` +
+      `&iiprop=url` +
+      `&iiurlwidth=600` +
+      `&format=json` +
+      `&origin=*`;
+
+    console.log(`[Scan][T2] Wikimedia Commons lookup for: "${productName}"`);
+
+    const res = await fetch(url, {
+      method: 'GET',
+      headers: { 'User-Agent': COSMOLYZE_UA, Accept: 'application/json' },
+      signal: AbortSignal.timeout(8000),
+    });
+
+    if (!res.ok) {
+      console.warn(`[Scan][T2] Wikimedia returned HTTP ${res.status}`);
+      return null;
+    }
+
+    const data = await res.json().catch(() => null);
+    const pages = data?.query?.pages;
+
+    if (!pages || typeof pages !== 'object') {
+      console.warn(`[Scan][T2] Wikimedia — no pages in response for: "${productName}"`);
+      return null;
+    }
+
+    for (const page of Object.values(pages)) {
+      const imageInfo = Array.isArray(page?.imageinfo) ? page.imageinfo : [];
+      for (const info of imageInfo) {
+        const candidate = info?.thumburl || info?.url;
+        // Skip SVG, maps, and non-image files
+        if (
+          typeof candidate === 'string' &&
+          /^https?:\/\//i.test(candidate) &&
+          !/\.svg$/i.test(candidate)
+        ) {
+          console.log(`[Scan][T2] Wikimedia image found for: "${productName}"`);
+          return candidate;
+        }
+      }
+    }
+
+    console.warn(`[Scan][T2] Wikimedia — no usable image for: "${productName}"`);
+    return null;
+  } catch (err) {
+    console.warn(`[Scan][T2] Wikimedia error: ${err.message}`);
+    return null;
+  }
+}
+
+// ── TIER 3: DuckDuckGo Scraper (last resort) ──────────────────────────────────
 /**
  * Obtain a DuckDuckGo vqd token required by the i.js image endpoint.
  * @returns {Promise<string|null>}
@@ -143,10 +268,11 @@ async function fetchDuckDuckGoVqd(query) {
         ...DDG_HEADERS,
         Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
       },
+      signal: AbortSignal.timeout(8000),
     });
 
     if (!res.ok) {
-      console.warn(`[Scan] DDG vqd page failed with status ${res.status}`);
+      console.warn(`[Scan][T3] DDG vqd page failed with status ${res.status}`);
       return null;
     }
 
@@ -162,30 +288,27 @@ async function fetchDuckDuckGoVqd(query) {
       if (match && match[1]) return match[1];
     }
 
-    console.warn('[Scan] DDG vqd token not found in response HTML');
+    console.warn('[Scan][T3] DDG vqd token not found in response HTML');
     return null;
   } catch (err) {
-    console.warn('[Scan] DDG vqd fetch error:', err.message);
+    console.warn('[Scan][T3] DDG vqd fetch error:', err.message);
     return null;
   }
 }
 
 /**
- * Fetch a product image via DuckDuckGo's free i.js image endpoint.
- * Function name retained for call-site compatibility.
- * Never throws — returns a live image URL string, or null on any failure.
- *
- * @param {string} productName — already normalised (trim + lowercase)
+ * Tier 3 internal: DuckDuckGo i.js image scraper.
+ * @param {string} productName — already normalised
  * @returns {Promise<string|null>}
  */
-async function fetchImageFromCSE(productName) {
+async function fetchImageFromDDG(productName) {
   try {
     const query = `${productName} product packaging bottle`;
-    console.log(`[Scan] DuckDuckGo image lookup for: "${productName}"`);
+    console.log(`[Scan][T3] DuckDuckGo image lookup for: "${productName}"`);
 
     const vqd = await fetchDuckDuckGoVqd(query);
     if (!vqd) {
-      console.warn('[Scan] DuckDuckGo lookup failed, falling back safely — missing vqd');
+      console.warn('[Scan][T3] DDG lookup — missing vqd, skipping');
       return null;
     }
 
@@ -198,35 +321,64 @@ async function fetchImageFromCSE(productName) {
       `&f=,,,` +
       `&p=1`;
 
-    const res = await fetch(ijsUrl, { method: 'GET', headers: DDG_HEADERS });
+    const res = await fetch(ijsUrl, {
+      method: 'GET',
+      headers: DDG_HEADERS,
+      signal: AbortSignal.timeout(8000),
+    });
 
     if (!res.ok) {
-      console.warn(
-        `[Scan] DuckDuckGo lookup failed, falling back safely — i.js status ${res.status}`
-      );
+      console.warn(`[Scan][T3] DDG i.js returned HTTP ${res.status}`);
       return null;
     }
 
     const data = await res.json().catch(() => null);
     const results = Array.isArray(data?.results) ? data.results : [];
 
-    // Prefer full-size `image`, then thumbnail
     for (const item of results) {
       const candidate = item?.image || item?.thumbnail || item?.url;
       if (typeof candidate === 'string' && /^https?:\/\//i.test(candidate)) {
-        console.log(`[Scan] DuckDuckGo image fetched successfully for: "${productName}"`);
+        console.log(`[Scan][T3] DuckDuckGo image found for: "${productName}"`);
         return candidate;
       }
     }
 
-    console.warn(
-      `[Scan] DuckDuckGo lookup failed, falling back safely — no image results for: "${productName}"`
-    );
+    console.warn(`[Scan][T3] DDG — no image results for: "${productName}"`);
     return null;
   } catch (err) {
-    console.warn('[Scan] DuckDuckGo lookup failed, falling back safely:', err.message);
+    console.warn('[Scan][T3] DDG error:', err.message);
     return null;
   }
+}
+
+// ── Multi-Tier Image Engine (public entry point) ───────────────────────────────
+/**
+ * 3-Tier resilient image lookup. Function name retained for call-site compatibility.
+ *
+ * Tier 1 → Open Beauty Facts  (purpose-built cosmetics database, zero auth)
+ * Tier 2 → Wikimedia Commons  (public domain image repository, zero auth)
+ * Tier 3 → DuckDuckGo scraper (last resort; may be rate-limited on cloud IPs)
+ *
+ * Never throws — returns a live image URL string, or null if all tiers fail.
+ *
+ * @param {string} productName — already normalised (trim + lowercase)
+ * @returns {Promise<string|null>}
+ */
+async function fetchImageFromCSE(productName) {
+  // ── Tier 1: Open Beauty Facts ────────────────────────────────────────────
+  const t1 = await fetchImageFromOpenBeautyFacts(productName);
+  if (t1) return t1;
+
+  // ── Tier 2: Wikimedia Commons ─────────────────────────────────────────────
+  const t2 = await fetchImageFromWikimedia(productName);
+  if (t2) return t2;
+
+  // ── Tier 3: DuckDuckGo (last resort) ─────────────────────────────────────
+  const t3 = await fetchImageFromDDG(productName);
+  if (t3) return t3;
+
+  console.warn(`[Scan] All 3 image tiers exhausted for: "${productName}"`);
+  return null;
 }
 
 /**
