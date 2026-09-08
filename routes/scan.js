@@ -5,10 +5,10 @@
  *   POST /api/scan/save          → Persist a scan result + update user streak
  *   GET  /api/scan/history       → Return last 20 scans for the authed user
  *   POST /api/scan/product-image → Fetch a commercial product packshot via
- *                                   DuckDuckGo with MongoDB TTL caching,
- *                                   sequential rate-limit, and concurrency dedup.
- *                                   On datacenter-IP 403s, auto-fails over
- *                                   through allorigins.win → corsproxy.io.
+ *                                   the Python image sidecar (FastAPI +
+ *                                   duckduckgo_search) at IMAGE_SERVICE_URL.
+ *                                   Falls over to FALLBACK_IMAGE if the
+ *                                   sidecar is unreachable or returns 404.
  */
 
 const express = require('express');
@@ -125,21 +125,14 @@ function isDummyCachedImage(imageUrl) {
 }
 
 // ── Shared constants ─────────────────────────────────────────────────────────
-const COSMOLYZE_UA = 'Cosmolyze - Production Engine';
 
-/** Full modern-browser emulation headers — reduces datacenter-IP bot rejection. */
-const DDG_HEADERS = {
-  'User-Agent':
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-  Accept: 'application/json, text/javascript, */*; q=0.01',
-  'Accept-Language': 'en-US,en;q=0.9,hi;q=0.8',
-  'Accept-Encoding': 'gzip, deflate, br',
-  Referer: 'https://duckduckgo.com/',
-  'Sec-Ch-Ua': '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
-  'Sec-Ch-Ua-Mobile': '?0',
-  'Sec-Ch-Ua-Platform': '"Windows"',
-  Connection: 'keep-alive',
-};
+/**
+ * Base URL of the Python image sidecar (FastAPI + duckduckgo_search).
+ * In production on Render set IMAGE_SERVICE_URL to the internal address
+ * of the sidecar web service (e.g. http://cosmolyze-imgsvc:8001).
+ * Defaults to localhost for local development.
+ */
+const IMAGE_SERVICE_URL = (process.env.IMAGE_SERVICE_URL || 'http://localhost:8001').replace(/\/$/, '');
 
 // ── Strict media rejection filter ────────────────────────────────────────────
 /**
@@ -171,263 +164,77 @@ function isInvalidProductMedia(title = '', url = '') {
   return false;
 }
 
-// ── DuckDuckGo — Commercial Product Packshot Search ─────────────────────────
+// ── Commercial Packshot Image Engine ───────────────────────────────────────────
 /**
- * Obtain a DuckDuckGo vqd token required by the i.js image endpoint.
- * Uses modern browser-emulation headers to reduce bot-detection rejections.
- * @returns {Promise<string|null>}
- */
-async function fetchDuckDuckGoVqd(query) {
-  try {
-    const url = `https://duckduckgo.com/?q=${encodeURIComponent(query)}`;
-    const res = await fetch(url, {
-      method: 'GET',
-      headers: {
-        ...DDG_HEADERS,
-        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-        'Sec-Fetch-Dest': 'document',
-        'Sec-Fetch-Mode': 'navigate',
-        'Sec-Fetch-Site': 'none',
-        'Upgrade-Insecure-Requests': '1',
-      },
-      signal: AbortSignal.timeout(8000),
-    });
-
-    if (!res.ok) {
-      console.warn(`[Scan][T2] DDG vqd page failed with status ${res.status}`);
-      return null;
-    }
-
-    const html = await res.text();
-    const patterns = [
-      /vqd=["']([^"']+)["']/i,
-      /vqd=([\d-]+)&/i,
-      /"vqd"\s*:\s*"([^"]+)"/i,
-    ];
-
-    for (const re of patterns) {
-      const match = html.match(re);
-      if (match && match[1]) return match[1];
-    }
-
-    console.warn('[Scan][T2] DDG vqd token not found in response HTML');
-    return null;
-  } catch (err) {
-    console.warn('[Scan][T2] DDG vqd fetch error:', err.message);
-    return null;
-  }
-}
-
-/**
- * Parse and validate DDG i.js JSON results into the first clean image URL.
- * Shared between the direct fetch and the proxy-retry path.
+ * Single-call packshot resolver: delegates to the Python image sidecar.
  *
- * @param {string} responseText — raw response body text
- * @param {string} productName  — used for logging
- * @returns {string|null}
- */
-/**
- * Top cosmetic retail CDN hostnames, in priority order.
- * Results whose URL contains one of these hosts are surfaced first.
- */
-const PRIORITY_CDN_HOSTS = [
-  'nykaa.com',
-  'sephora.com',
-  'amazon.com',
-  'tirabeauty.com',
-  'myntra.com',
-  'purplle.com',
-];
-
-function extractDDGImageFromResponseText(responseText, productName) {
-  let data = null;
-  try { data = JSON.parse(responseText); } catch { return null; }
-
-  const results = Array.isArray(data?.results) ? data.results : [];
-
-  // Collect all valid candidates first so we can apply the CDN priority gate.
-  const valid = [];
-  for (const item of results) {
-    const candidate = item?.image || item?.thumbnail || item?.url;
-    const title = item?.title || '';
-    if (
-      typeof candidate === 'string' &&
-      /^https?:\/\//i.test(candidate) &&
-      !isInvalidProductMedia(title, candidate)
-    ) {
-      valid.push({ url: candidate, title });
-    } else if (candidate) {
-      console.log(`[Scan][DDG] Rejected invalid media: "${title}"`);
-    }
-  }
-
-  if (valid.length === 0) return null;
-
-  // ── Domain priority gate: prefer top cosmetic retail CDNs ────────────────
-  for (const host of PRIORITY_CDN_HOSTS) {
-    const prioritized = valid.find((v) => v.url.includes(host));
-    if (prioritized) {
-      console.log(`[Scan][DDG] Priority CDN match (${host}) for: "${productName}"`);
-      return prioritized.url;
-    }
-  }
-
-  // Fallback: first passing candidate regardless of host
-  console.log(`[Scan][DDG] Image found (no priority CDN) for: "${productName}"`);
-  return valid[0].url;
-}
-
-/**
- * DuckDuckGo i.js commercial product packshot search.
+ * The sidecar (image_service/main.py) uses the `duckduckgo_search` library
+ * which manages vqd token acquisition, cookie jars, and retry backoff
+ * internally via a persistent requests.Session. This is what allows it to
+ * work from Render datacenter IPs where Node.js raw fetch() is ASN-blocked.
  *
- * Query is retailer-anchored to surface official e-commerce listing images
- * (Sephora, Nykaa, Amazon, Tira Beauty, Myntra, Purplle) rather than
- * user reviews or encyclopedic assets.
+ * Returns null (→ FALLBACK_IMAGE at call site) when:
+ *   - The sidecar is unreachable (network error / not yet started)
+ *   - The sidecar returns 404 (no valid image found)
+ *   - The sidecar returns 502 (upstream DDG error)
  *
- * On HTTP 403 (datacenter IP ban), retries sequentially through:
- *   1. allorigins.win CORS proxy
- *   2. corsproxy.io CORS proxy
- *
- * @param {string} productName — already normalised (trim + lowercase)
- * @returns {Promise<string|null>}
- */
-async function fetchImageFromDDG(productName) {
-  try {
-    // Retailer-anchored query with negative keywords to eliminate newspaper
-    // clippings, article scans, and PDF thumbnails from results.
-    const query =
-      `"${productName}" product packaging bottle sephora nykaa amazon -newspaper -letter -article -pdf`;
-
-    console.log(`[Scan][T2] DuckDuckGo image lookup for: "${productName}"`);
-
-    const vqd = await fetchDuckDuckGoVqd(query);
-    if (!vqd) {
-      console.warn('[Scan][T2] DDG lookup — missing vqd, skipping');
-      return null;
-    }
-
-    const ijsUrl =
-      `https://duckduckgo.com/i.js` +
-      `?l=us-en` +
-      `&o=json` +
-      `&q=${encodeURIComponent(query)}` +
-      `&vqd=${encodeURIComponent(vqd)}` +
-      `&f=,,,` +
-      `&p=1`;
-
-    // ── Attempt 1: Direct fetch with full modern browser-emulation headers ────
-    const DDG_FULL_HEADERS = {
-      ...DDG_HEADERS,
-      'Sec-Fetch-Dest': 'empty',
-      'Sec-Fetch-Mode': 'cors',
-      'Sec-Fetch-Site': 'same-origin',
-      'X-Requested-With': 'XMLHttpRequest',
-    };
-
-    let responseText = null;
-    const directRes = await fetch(ijsUrl, {
-      method: 'GET',
-      headers: DDG_FULL_HEADERS,
-      signal: AbortSignal.timeout(8000),
-    });
-
-    if (directRes.ok) {
-      responseText = await directRes.text().catch(() => null);
-    } else if (directRes.status === 403) {
-      // ── Attempt 2: 403 → retry via allorigins.win ────────────────────────
-      console.warn('[Scan][DDG] i.js returned 403 — retrying via allorigins.win proxy');
-      const proxy1Url = `https://api.allorigins.win/raw?url=${encodeURIComponent(ijsUrl)}`;
-      try {
-        const proxy1Res = await fetch(proxy1Url, {
-          method: 'GET',
-          headers: { 'User-Agent': COSMOLYZE_UA },
-          signal: AbortSignal.timeout(10000),
-        });
-        if (proxy1Res.ok) {
-          responseText = await proxy1Res.text().catch(() => null);
-          console.log('[Scan][DDG] allorigins.win proxy fetch succeeded');
-        } else {
-          console.warn(`[Scan][DDG] allorigins.win proxy returned HTTP ${proxy1Res.status} — trying corsproxy.io`);
-        }
-      } catch (proxy1Err) {
-        console.warn(`[Scan][DDG] allorigins.win proxy error: ${proxy1Err.message} — trying corsproxy.io`);
-      }
-
-      // ── Attempt 3: still no response → corsproxy.io ──────────────────────
-      if (!responseText) {
-        const proxy2Url = `https://corsproxy.io/?url=${encodeURIComponent(ijsUrl)}`;
-        try {
-          const proxy2Res = await fetch(proxy2Url, {
-            method: 'GET',
-            headers: { 'User-Agent': COSMOLYZE_UA },
-            signal: AbortSignal.timeout(10000),
-          });
-          if (proxy2Res.ok) {
-            responseText = await proxy2Res.text().catch(() => null);
-            console.log('[Scan][DDG] corsproxy.io proxy fetch succeeded');
-          } else {
-            console.warn(`[Scan][DDG] corsproxy.io proxy returned HTTP ${proxy2Res.status}`);
-          }
-        } catch (proxy2Err) {
-          console.warn(`[Scan][DDG] corsproxy.io proxy error: ${proxy2Err.message}`);
-        }
-      }
-    } else {
-      console.warn(`[Scan][DDG] i.js returned HTTP ${directRes.status}`);
-    }
-
-    if (!responseText) {
-      console.warn(`[Scan][DDG] No usable response for: "${productName}"`);
-      return null;
-    }
-
-    const found = extractDDGImageFromResponseText(responseText, productName);
-    if (!found) {
-      console.warn(`[Scan][DDG] No valid product image in results for: "${productName}"`);
-    }
-    return found;
-  } catch (err) {
-    console.warn('[Scan][DDG] Fetch error:', err.message);
-    return null;
-  }
-}
-
-// ── Commercial Packshot Image Engine (public entry point) ────────────────────
-/**
- * Pure DuckDuckGo commercial packshot pipeline.
- * Function name retained for call-site compatibility.
- *
- * Query targets official e-commerce product listing images from top cosmetic
- * retailers (Sephora, Nykaa, Amazon, Tira Beauty, Myntra, Purplle).
- * Results are filtered through isInvalidProductMedia() and ranked by
- * a CDN priority gate before being accepted.
- *
- * On datacenter-IP 403s the engine fails over through:
- *   allorigins.win → corsproxy.io
- *
- * Returns null (→ FALLBACK_IMAGE at call site) only when all attempts fail.
  * Never throws.
  *
  * @param {string} productName — already normalised (trim + lowercase)
  * @returns {Promise<string|null>}
  */
 async function fetchImageFromCSE(productName) {
-  const result = await fetchImageFromDDG(productName);
+  try {
+    console.log(`[ImageEngine] Requesting sidecar for: "${productName}"`);
 
-  if (result) {
-    console.log(`[ImageEngine] Resolved ${productName} -> ${result}`);
-    return result;
+    const res = await fetch(`${IMAGE_SERVICE_URL}/image`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ product_name: productName }),
+      signal: AbortSignal.timeout(20000), // sidecar may need up to ~15s for DDG
+    });
+
+    if (res.status === 404) {
+      console.warn(`[ImageEngine] Sidecar: no image found for "${productName}"`);
+      return null;
+    }
+
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      console.warn(`[ImageEngine] Sidecar returned HTTP ${res.status} for "${productName}": ${body}`);
+      return null;
+    }
+
+    const data = await res.json().catch(() => null);
+    if (data?.image_url) {
+      console.log(`[ImageEngine] Resolved ${productName} -> ${data.image_url}`);
+      return data.image_url;
+    }
+
+    console.warn(`[ImageEngine] Sidecar response missing image_url for: "${productName}"`);
+    return null;
+  } catch (err) {
+    // AbortError means the sidecar timed out; any other error means it's not running.
+    console.warn(`[ImageEngine] Sidecar unreachable for "${productName}": ${err.message}`);
+    return null;
   }
-
-  console.warn(`[ImageEngine] All attempts exhausted for: "${productName}" — falling back to placeholder`);
-  return null;
 }
 
 /**
- * Persist product image (real or fallback) to MongoDB cache.
- * Always runs — never skips the DB write pipeline.
+ * Persist a REAL product image URL to MongoDB cache.
+ *
+ * IMPORTANT: Deliberately skips the write when `imageUrl` is the local
+ * fallback placeholder. Writing fallback URLs poisons the cache — the next
+ * request would get a cache HIT on a placeholder and never retry the network.
+ * Leaving the document absent is correct: the TTL cache miss logic triggers
+ * a fresh lookup on the very next request.
  */
 async function persistProductImageCache(productKey, imageUrl) {
+  // Skip write for fallback/dummy URLs — never poison the cache.
+  if (!imageUrl || isDummyCachedImage(imageUrl)) {
+    console.log(`[Scan] Cache write SKIPPED for fallback URL: "${productKey}"`);
+    return false;
+  }
   try {
     await CachedProduct.findOneAndUpdate(
       { productName: productKey },
@@ -520,13 +327,16 @@ router.post('/product-image', async (req, res) => {
         imageUrl = ddgResult;
       }
 
-      // ── Layer 4: ALWAYS overwrite MongoDB (live URL or fallback) ────────────
-      await persistProductImageCache(productKey, imageUrl);
+      // ── Layer 4: Persist to MongoDB — only for real URLs, never fallback ──
+      if (imageUrl !== FALLBACK_IMAGE) {
+        await persistProductImageCache(productKey, imageUrl);
+      }
       resolveInflight(imageUrl);
     } catch (unexpectedErr) {
       console.warn('[Scan] DuckDuckGo lookup failed, falling back safely:', unexpectedErr.message);
       imageUrl = FALLBACK_IMAGE;
-      await persistProductImageCache(productKey, imageUrl);
+      // Do NOT persist the fallback — let the cache stay empty so the next
+      // request triggers a fresh network attempt.
       resolveInflight(imageUrl);
     } finally {
       inflightRequests.delete(productKey);
