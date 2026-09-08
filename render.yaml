@@ -1,0 +1,51 @@
+﻿# =============================================================================
+# render.yaml — Cosmolyze Render Deployment Configuration
+#
+# Single web service that runs BOTH:
+#   - Node.js / Express API (port from $PORT, assigned by Render)
+#   - Python FastAPI image sidecar (localhost:8001, internal only)
+#
+# The build step installs Node AND Python dependencies so both are ready
+# before start.sh is executed.
+# =============================================================================
+
+services:
+  - type: web
+    name: cosmolyze
+    runtime: node
+    region: oregon                   # or singapore for lower India latency
+    plan: free
+
+    # ── Build ──────────────────────────────────────────────────────────────
+    # Install Node deps first, then Python deps for the image sidecar.
+    # Render caches node_modules and pip packages between deploys.
+    buildCommand: npm install && pip install -r image_service/requirements.txt
+
+    # ── Start ──────────────────────────────────────────────────────────────
+    # start.sh launches uvicorn (background) then node server.js (foreground).
+    startCommand: bash start.sh
+
+    # ── Health Check ───────────────────────────────────────────────────────
+    # Render pings /api to confirm the Node server is up before routing traffic.
+    healthCheckPath: /api
+
+    # ── Environment Variables ──────────────────────────────────────────────
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: IMAGE_SERVICE_URL
+        value: http://localhost:8001
+      # The following secrets must be set manually in the Render dashboard
+      # (or via render.yaml secret references if using Render Secret Store).
+      # They are listed here for documentation only — values are intentionally
+      # omitted so they are never committed to Git.
+      - key: MONGODB_URI
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY_CURRENT
+        sync: false
+      - key: OPENROUTER_API_KEY
+        sync: false
