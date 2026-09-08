@@ -1,2 +1,23 @@
 node_modules/
 .env
+
+# ── Python virtual environment ────────────────────────────────────────────────
+.venv/
+venv/
+env/
+
+# ── Python bytecode & cache ───────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+
+# ── Distribution / packaging ──────────────────────────────────────────────────
+dist/
+build/
+*.egg-info/
+
+# ── OS noise ─────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db

@@ -1,4 +1,24 @@
 {
     "git.ignoreLimitWarning": true,
-    "liveServer.settings.port": 5501
+    "liveServer.settings.port": 5501,
+
+    // ── Python interpreter (venv) ─────────────────────────────────────────
+    // Points Pylance / Pylint to the local .venv so fastapi, duckduckgo_search,
+    // httpx, and pydantic are resolved without red import squiggles.
+    "python.defaultInterpreterPath": "${workspaceFolder}/.venv/Scripts/python.exe",
+
+    // ── Pylance / pyright analysis extras ────────────────────────────────
+    // Makes the image_service/ directory a recognised package root so
+    // `from image_service.main import ...` resolves cleanly in tests.
+    "python.analysis.extraPaths": [
+        "${workspaceFolder}",
+        "${workspaceFolder}/image_service"
+    ],
+
+    // ── Lint / format settings ────────────────────────────────────────────
+    "python.analysis.typeCheckingMode": "basic",
+    "[python]": {
+        "editor.formatOnSave": true,
+        "editor.defaultFormatter": "ms-python.python"
+    }
 }
