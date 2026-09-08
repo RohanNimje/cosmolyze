@@ -4,9 +4,11 @@
  * Endpoints:
  *   POST /api/scan/save          → Persist a scan result + update user streak
  *   GET  /api/scan/history       → Return last 20 scans for the authed user
- *   POST /api/scan/product-image → Fetch a product image via DuckDuckGo with
- *                                   MongoDB TTL caching, sequential rate-limit,
- *                                   and concurrency dedup
+ *   POST /api/scan/product-image → Fetch a commercial product packshot via
+ *                                   DuckDuckGo with MongoDB TTL caching,
+ *                                   sequential rate-limit, and concurrency dedup.
+ *                                   On datacenter-IP 403s, auto-fails over
+ *                                   through allorigins.win → corsproxy.io.
  */
 
 const express = require('express');
@@ -125,12 +127,18 @@ function isDummyCachedImage(imageUrl) {
 // ── Shared constants ─────────────────────────────────────────────────────────
 const COSMOLYZE_UA = 'Cosmolyze - Production Engine';
 
+/** Full modern-browser emulation headers — reduces datacenter-IP bot rejection. */
 const DDG_HEADERS = {
   'User-Agent':
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
   Accept: 'application/json, text/javascript, */*; q=0.01',
-  'Accept-Language': 'en-US,en;q=0.9',
+  'Accept-Language': 'en-US,en;q=0.9,hi;q=0.8',
+  'Accept-Encoding': 'gzip, deflate, br',
   Referer: 'https://duckduckgo.com/',
+  'Sec-Ch-Ua': '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+  'Sec-Ch-Ua-Mobile': '?0',
+  'Sec-Ch-Ua-Platform': '"Windows"',
+  Connection: 'keep-alive',
 };
 
 // ── Strict media rejection filter ────────────────────────────────────────────
@@ -163,68 +171,7 @@ function isInvalidProductMedia(title = '', url = '') {
   return false;
 }
 
-// ── TIER 1: Open Beauty Facts ─────────────────────────────────────────────────
-/**
- * Query world.openbeautyfacts.org for a product image.
- * Uses the public JSON search endpoint — no API key required.
- *
- * @param {string} productName — normalised (trim + lowercase)
- * @returns {Promise<string|null>} — live image URL or null
- */
-async function fetchImageFromOpenBeautyFacts(productName) {
-  try {
-    // Use the full product name for the most specific match possible.
-    // Open Beauty Facts is a structured cosmetics DB so no negative keywords are needed —
-    // results are official product entries; we still run the URL through isInvalidProductMedia.
-    const url =
-      `https://world.openbeautyfacts.org/cgi/search.pl` +
-      `?search_terms=${encodeURIComponent(productName)}` +
-      `&search_simple=1` +
-      `&action=process` +
-      `&json=1` +
-      `&page_size=10` +
-      `&fields=image_front_url,image_url,product_name`;
-
-    console.log(`[Scan][T1] OpenBeautyFacts lookup for: "${productName}"`);
-
-    const res = await fetch(url, {
-      method: 'GET',
-      headers: { 'User-Agent': COSMOLYZE_UA, Accept: 'application/json' },
-      signal: AbortSignal.timeout(8000),
-    });
-
-    if (!res.ok) {
-      console.warn(`[Scan][T1] OpenBeautyFacts returned HTTP ${res.status}`);
-      return null;
-    }
-
-    const data = await res.json().catch(() => null);
-    const products = Array.isArray(data?.products) ? data.products : [];
-
-    for (const p of products) {
-      // Prefer the official front-of-pack shot; fall back to any product image.
-      const candidate = p?.image_front_url || p?.image_url;
-      if (
-        typeof candidate === 'string' &&
-        /^https?:\/\//i.test(candidate) &&
-        !isInvalidProductMedia(p?.product_name || '', candidate)
-      ) {
-        console.log(`[Scan][T1] OpenBeautyFacts image found for: "${productName}"`);
-        return candidate;
-      }
-    }
-
-    console.warn(`[Scan][T1] OpenBeautyFacts — no usable image for: "${productName}"`);
-    return null;
-  } catch (err) {
-    console.warn(`[Scan][T1] OpenBeautyFacts error: ${err.message}`);
-    return null;
-  }
-}
-
-
-
-// ── TIER 2: DuckDuckGo — Commercial Product Packshot Search ──────────────────
+// ── DuckDuckGo — Commercial Product Packshot Search ─────────────────────────
 /**
  * Obtain a DuckDuckGo vqd token required by the i.js image endpoint.
  * Uses modern browser-emulation headers to reduce bot-detection rejections.
@@ -279,11 +226,27 @@ async function fetchDuckDuckGoVqd(query) {
  * @param {string} productName  — used for logging
  * @returns {string|null}
  */
+/**
+ * Top cosmetic retail CDN hostnames, in priority order.
+ * Results whose URL contains one of these hosts are surfaced first.
+ */
+const PRIORITY_CDN_HOSTS = [
+  'nykaa.com',
+  'sephora.com',
+  'amazon.com',
+  'tirabeauty.com',
+  'myntra.com',
+  'purplle.com',
+];
+
 function extractDDGImageFromResponseText(responseText, productName) {
   let data = null;
   try { data = JSON.parse(responseText); } catch { return null; }
 
   const results = Array.isArray(data?.results) ? data.results : [];
+
+  // Collect all valid candidates first so we can apply the CDN priority gate.
+  const valid = [];
   for (const item of results) {
     const candidate = item?.image || item?.thumbnail || item?.url;
     const title = item?.title || '';
@@ -292,34 +255,48 @@ function extractDDGImageFromResponseText(responseText, productName) {
       /^https?:\/\//i.test(candidate) &&
       !isInvalidProductMedia(title, candidate)
     ) {
-      console.log(`[Scan][T2] DDG image found for: "${productName}"`);
-      return candidate;
-    }
-    if (candidate && isInvalidProductMedia(title, candidate)) {
-      console.log(`[Scan][T2] DDG — rejected invalid media: "${title}"`);
+      valid.push({ url: candidate, title });
+    } else if (candidate) {
+      console.log(`[Scan][DDG] Rejected invalid media: "${title}"`);
     }
   }
-  return null;
+
+  if (valid.length === 0) return null;
+
+  // ── Domain priority gate: prefer top cosmetic retail CDNs ────────────────
+  for (const host of PRIORITY_CDN_HOSTS) {
+    const prioritized = valid.find((v) => v.url.includes(host));
+    if (prioritized) {
+      console.log(`[Scan][DDG] Priority CDN match (${host}) for: "${productName}"`);
+      return prioritized.url;
+    }
+  }
+
+  // Fallback: first passing candidate regardless of host
+  console.log(`[Scan][DDG] Image found (no priority CDN) for: "${productName}"`);
+  return valid[0].url;
 }
 
 /**
- * Tier 2: DuckDuckGo i.js commercial product image search.
+ * DuckDuckGo i.js commercial product packshot search.
  *
- * Query targets real e-commerce listings (Sephora, Nykaa, Amazon) for
- * authentic product bottle images.
+ * Query is retailer-anchored to surface official e-commerce listing images
+ * (Sephora, Nykaa, Amazon, Tira Beauty, Myntra, Purplle) rather than
+ * user reviews or encyclopedic assets.
  *
- * On HTTP 403 (datacenter IP ban), retries once through the free
- * allorigins.win CORS/proxy relay to bypass the block.
+ * On HTTP 403 (datacenter IP ban), retries sequentially through:
+ *   1. allorigins.win CORS proxy
+ *   2. corsproxy.io CORS proxy
  *
  * @param {string} productName — already normalised (trim + lowercase)
  * @returns {Promise<string|null>}
  */
 async function fetchImageFromDDG(productName) {
   try {
-    // Commercial retailer-anchored query: surfaces e-commerce product listing
-    // images rather than user reviews or encyclopedic assets.
+    // Retailer-anchored query with negative keywords to eliminate newspaper
+    // clippings, article scans, and PDF thumbnails from results.
     const query =
-      `"${productName}" product bottle packaging sephora nykaa amazon`;
+      `"${productName}" product packaging bottle sephora nykaa amazon -newspaper -letter -article -pdf`;
 
     console.log(`[Scan][T2] DuckDuckGo image lookup for: "${productName}"`);
 
@@ -338,7 +315,7 @@ async function fetchImageFromDDG(productName) {
       `&f=,,,` +
       `&p=1`;
 
-    // ── Attempt 1: Direct fetch with modern browser-emulation headers ─────────
+    // ── Attempt 1: Direct fetch with full modern browser-emulation headers ────
     const DDG_FULL_HEADERS = {
       ...DDG_HEADERS,
       'Sec-Fetch-Dest': 'empty',
@@ -357,70 +334,92 @@ async function fetchImageFromDDG(productName) {
     if (directRes.ok) {
       responseText = await directRes.text().catch(() => null);
     } else if (directRes.status === 403) {
-      // ── Attempt 2: 403 detected → retry via allorigins.win proxy ─────────
-      console.warn('[Scan][T2] DDG i.js returned 403 — retrying via allorigins.win proxy');
-      const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(ijsUrl)}`;
+      // ── Attempt 2: 403 → retry via allorigins.win ────────────────────────
+      console.warn('[Scan][DDG] i.js returned 403 — retrying via allorigins.win proxy');
+      const proxy1Url = `https://api.allorigins.win/raw?url=${encodeURIComponent(ijsUrl)}`;
       try {
-        const proxyRes = await fetch(proxyUrl, {
+        const proxy1Res = await fetch(proxy1Url, {
           method: 'GET',
           headers: { 'User-Agent': COSMOLYZE_UA },
           signal: AbortSignal.timeout(10000),
         });
-        if (proxyRes.ok) {
-          responseText = await proxyRes.text().catch(() => null);
-          console.log('[Scan][T2] allorigins.win proxy fetch succeeded');
+        if (proxy1Res.ok) {
+          responseText = await proxy1Res.text().catch(() => null);
+          console.log('[Scan][DDG] allorigins.win proxy fetch succeeded');
         } else {
-          console.warn(`[Scan][T2] allorigins.win proxy returned HTTP ${proxyRes.status}`);
+          console.warn(`[Scan][DDG] allorigins.win proxy returned HTTP ${proxy1Res.status} — trying corsproxy.io`);
         }
-      } catch (proxyErr) {
-        console.warn(`[Scan][T2] allorigins.win proxy error: ${proxyErr.message}`);
+      } catch (proxy1Err) {
+        console.warn(`[Scan][DDG] allorigins.win proxy error: ${proxy1Err.message} — trying corsproxy.io`);
+      }
+
+      // ── Attempt 3: still no response → corsproxy.io ──────────────────────
+      if (!responseText) {
+        const proxy2Url = `https://corsproxy.io/?url=${encodeURIComponent(ijsUrl)}`;
+        try {
+          const proxy2Res = await fetch(proxy2Url, {
+            method: 'GET',
+            headers: { 'User-Agent': COSMOLYZE_UA },
+            signal: AbortSignal.timeout(10000),
+          });
+          if (proxy2Res.ok) {
+            responseText = await proxy2Res.text().catch(() => null);
+            console.log('[Scan][DDG] corsproxy.io proxy fetch succeeded');
+          } else {
+            console.warn(`[Scan][DDG] corsproxy.io proxy returned HTTP ${proxy2Res.status}`);
+          }
+        } catch (proxy2Err) {
+          console.warn(`[Scan][DDG] corsproxy.io proxy error: ${proxy2Err.message}`);
+        }
       }
     } else {
-      console.warn(`[Scan][T2] DDG i.js returned HTTP ${directRes.status}`);
+      console.warn(`[Scan][DDG] i.js returned HTTP ${directRes.status}`);
     }
 
     if (!responseText) {
-      console.warn(`[Scan][T2] DDG — no usable response for: "${productName}"`);
+      console.warn(`[Scan][DDG] No usable response for: "${productName}"`);
       return null;
     }
 
     const found = extractDDGImageFromResponseText(responseText, productName);
     if (!found) {
-      console.warn(`[Scan][T2] DDG — no valid product image in results for: "${productName}"`);
+      console.warn(`[Scan][DDG] No valid product image in results for: "${productName}"`);
     }
     return found;
   } catch (err) {
-    console.warn('[Scan][T2] DDG error:', err.message);
+    console.warn('[Scan][DDG] Fetch error:', err.message);
     return null;
   }
 }
 
-// ── Multi-Tier Image Engine (public entry point) ───────────────────────────────
+// ── Commercial Packshot Image Engine (public entry point) ────────────────────
 /**
- * 2-Tier resilient image lookup. Function name retained for call-site compatibility.
+ * Pure DuckDuckGo commercial packshot pipeline.
+ * Function name retained for call-site compatibility.
  *
- * Tier 1 → Open Beauty Facts  (purpose-built cosmetics database, structured data)
- * Tier 2 → DuckDuckGo         (commercial retailer-anchored packshot search;
- *                              403-bypass via allorigins.win proxy on datacenter IPs)
+ * Query targets official e-commerce product listing images from top cosmetic
+ * retailers (Sephora, Nykaa, Amazon, Tira Beauty, Myntra, Purplle).
+ * Results are filtered through isInvalidProductMedia() and ranked by
+ * a CDN priority gate before being accepted.
  *
- * Every candidate URL is validated through isInvalidProductMedia() before being
- * accepted. If both tiers are exhausted, returns null so FALLBACK_IMAGE is used.
+ * On datacenter-IP 403s the engine fails over through:
+ *   allorigins.win → corsproxy.io
  *
+ * Returns null (→ FALLBACK_IMAGE at call site) only when all attempts fail.
  * Never throws.
  *
  * @param {string} productName — already normalised (trim + lowercase)
  * @returns {Promise<string|null>}
  */
 async function fetchImageFromCSE(productName) {
-  // ── Tier 1: Open Beauty Facts ────────────────────────────────────────────
-  const t1 = await fetchImageFromOpenBeautyFacts(productName);
-  if (t1) return t1;
+  const result = await fetchImageFromDDG(productName);
 
-  // ── Tier 2: DuckDuckGo commercial packshot search ─────────────────────────
-  const t2 = await fetchImageFromDDG(productName);
-  if (t2) return t2;
+  if (result) {
+    console.log(`[ImageEngine] Resolved ${productName} -> ${result}`);
+    return result;
+  }
 
-  console.warn(`[Scan] Both image tiers exhausted for: "${productName}" — using fallback`);
+  console.warn(`[ImageEngine] All attempts exhausted for: "${productName}" — falling back to placeholder`);
   return null;
 }
 
