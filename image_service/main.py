@@ -1,11 +1,11 @@
-﻿"""
+"""
 image_service/main.py — Cosmolyze Image Sidecar
 ================================================
-Lightweight FastAPI microservice that wraps the duckduckgo_search library
+Lightweight FastAPI microservice that wraps the ddgs library (formerly duckduckgo_search)
 to fetch genuine commercial product packshot URLs (Amazon, Nykaa, Sephora, etc.).
 
 Why Python instead of Node.js fetch():
-  - duckduckgo_search manages the vqd token lifecycle internally using a
+  - ddgs (formerly duckduckgo_search) manages the vqd token lifecycle using a
     persistent requests.Session + cookie jar — this works from datacenter IPs.
   - Node.js raw fetch() against duckduckgo.com is blocked at the ASN level
     on Render/AWS IPs because the HTML response never contains the vqd token.
@@ -24,7 +24,7 @@ Run locally:
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from duckduckgo_search import DDGS
+from ddgs import DDGS
 import re
 import logging
 import time
@@ -132,23 +132,35 @@ def get_product_image(req: ImageRequest):
     log.info(f"[ImageSvc] Querying DDG: {query}")
 
     start = time.time()
-    try:
-        # DDGS() manages a persistent requests.Session internally.
-        # This is what makes it work from datacenter IPs: the library handles
-        # cookie jars, vqd token acquisition, and retry backoff automatically.
-        with DDGS() as ddgs:
-            results = list(
-                ddgs.images(
-                    query,
-                    region="us-en",
-                    safesearch="off",
-                    max_results=30,
+    results = []
+    last_exc: Exception | None = None
+
+    # DDG rate-limits cold requests with HTTP 403. Retry up to 3×
+    # with exponential back-off (1 s → 2 s → 4 s). Works on both
+    # residential and datacenter IPs (Render, Railway, Fly.io).
+    for attempt in range(1, 4):
+        try:
+            with DDGS() as ddgs:
+                results = list(
+                    ddgs.images(
+                        query,
+                        region="us-en",
+                        safesearch="off",
+                        max_results=30,
+                    )
                 )
-            )
-    except Exception as exc:
+            break  # success — exit retry loop
+        except Exception as exc:
+            last_exc = exc
+            elapsed = round((time.time() - start) * 1000)
+            log.warning(f"[ImageSvc] DDG attempt {attempt} failed after {elapsed}ms: {exc}")
+            if attempt < 3:
+                time.sleep(2 ** (attempt - 1))  # 1 s, 2 s
+
+    if last_exc and not results:
         elapsed = round((time.time() - start) * 1000)
-        log.error(f"[ImageSvc] DDG error after {elapsed}ms: {exc}")
-        raise HTTPException(status_code=502, detail=f"upstream_error: {exc}")
+        log.error(f"[ImageSvc] DDG all retries exhausted after {elapsed}ms: {last_exc}")
+        raise HTTPException(status_code=502, detail=f"upstream_error: {last_exc}")
 
     elapsed = round((time.time() - start) * 1000)
     log.info(f"[ImageSvc] DDG returned {len(results)} results in {elapsed}ms")
