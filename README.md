@@ -9,6 +9,8 @@
 [![Computer Vision](https://img.shields.io/badge/Vision-Google%20Gemini%20%2F%20Groq-4285F4?style=flat-square&logo=google&logoColor=white)](https://ai.google.dev/)
 [![Tailwind CSS](https://img.shields.io/badge/UI-Tailwind%20CSS-06B6D4?style=flat-square&logo=tailwindcss&logoColor=white)](https://tailwindcss.com/)
 
+> 📖 **Comprehensive System Documentation:**  
+> For deep-dive architectural breakdowns, INCI audit mechanisms, API schemas, and resilience fallbacks, explore the [Cosmolyze Architecture DeepWiki](https://deepwiki.com/RohanNimje/cosmolyze/7-glossary).
 ---
 
 ## 1. Overview & Value Proposition
