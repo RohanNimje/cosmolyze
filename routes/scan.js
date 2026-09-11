@@ -5,11 +5,13 @@
  *   POST /api/scan/save          → Persist a scan result + update user streak
  *   GET  /api/scan/history       → Return last 20 scans for the authed user
  *   POST /api/scan/product-image → Resolve a commercial product packshot.
- *                                   Layer 1: MongoDB TTL cache   (~50ms)
- *                                   Layer 2: Bing Image Search scraper (~800ms, zero-cost)
- *                                            Extracts full-res source URLs from Bing's
- *                                            murl data island using iPhone UA. Falls back
- *                                            to Bing thumbnail CDN if no source URL found.
+ *                                   Layer 1: MongoDB TTL cache        (~50ms)
+ *                                   Layer 2: Bing Image Search scraper (~800ms)
+ *                                     • Strict query: quoted product name + negatives
+ *                                     • Tier 1: murl data island → full-res retail CDN
+ *                                       (PACKSHOT_ALLOW / PACKSHOT_DENY classification)
+ *                                     • Tier 2: Bing CDN thumbnail (th.bing.com or
+ *                                       tse*.mm.bing.net) — always https, always 200
  *                                   Layer 3: { imageUrl: null, query } signal
  *                                            → client resolves from browser IP
  *   POST /api/scan/cache-image   → Client backfills MongoDB after browser-side
@@ -24,25 +26,22 @@ const CachedProduct = require('../models/CachedProduct');
 
 const router = express.Router();
 
-// ── Inflight stagger — prevents burst-drop under simultaneous requests ─────────
-// A lightweight 50ms gate ensures concurrent image lookups don't all hammer
-// Bing at the exact same millisecond, which can trigger rate limiting.
+// ── Inflight stagger — eliminates Bing rate-limiting during 5-card burst ────────
+// Delay is proportional to current concurrency (120ms × inflight count, max 600ms).
+// Duplicate requests for the same productKey are coalesced onto one promise.
 const inflightRequests = new Map();
-const STAGGER_MS = 50;
-let lastFetchAt = 0;
+const STAGGER_MS = 120;
 
 async function staggeredFetch(productKey, fetcher) {
   // Coalesce duplicate in-flight requests for the same product
   if (inflightRequests.has(productKey)) {
     return inflightRequests.get(productKey);
   }
-  // Apply 50ms stagger between requests
-  const now = Date.now();
-  const gap = now - lastFetchAt;
-  if (gap < STAGGER_MS) {
-    await new Promise((r) => setTimeout(r, STAGGER_MS - gap));
+  // Stagger proportional to concurrent load, capped at 600ms
+  const delay = Math.min(inflightRequests.size * STAGGER_MS, 600);
+  if (delay > 0) {
+    await new Promise((r) => setTimeout(r, delay));
   }
-  lastFetchAt = Date.now();
 
   const promise = fetcher().finally(() => inflightRequests.delete(productKey));
   inflightRequests.set(productKey, promise);
@@ -121,31 +120,50 @@ function isDummyCachedImage(imageUrl) {
 }
 
 // ── Bing Image Search Scraper ─────────────────────────────────────────────────
+
+/**
+ * Tier 1 domain allow/deny lists for murl candidates.
+ *
+ * PACKSHOT_ALLOW: URL path signals strongly indicating a retail product image
+ *   (e-commerce CDN slugs, brand slugs, well-known packaging keywords).
+ * PACKSHOT_DENY:  Sites that exclusively serve stock photos, AI art,
+ *   wallpapers, or food content — never a real product packshot.
+ */
+const PACKSHOT_ALLOW =
+  /cdn\.|shop\.|product|catalog|media|img\d*\.|images\d*\.|static\.|assets\.|store\.|upload|wp-content|wp-uploads|gallery|ecommerce|buyonline|pharma|beauty|health|loreal|neutrogena|cerave|ordinary|minimalist|mamaearth|dotandkey|plum|lakme|himalaya|beardo|wow|vlcc|forest|khadi|biotique|innisfree|inkey|garnier|nivea|olay|ponds|vaseline|dove|stridex|skinceuticals|paulaschoice|cocokind|glow|supergoop|tatcha|kiehl|laneige|cosrx|pacifica|acnefree|clearasil|bioderma|la.roche|vichy|avene|caudalie|murad|dermalogica|clinique|estee|lancome|shiseido/i;
+
+const PACKSHOT_DENY =
+  /wallpaper|recipe|school|anime|meme|food\.(?:com|net|org)|nutrition|cooking|restaurant|vecteezy|freepik\.com|shutterstock|alamy\.com|istockphoto|gettyimages|dreamstime|stockphoto|vectorstock|stablediffusion|midjourney|dalle|pixabay\.com|pexels\.com|unsplash\.com|mockupcloud|pinshop\.com|depositphotos|123rf\.com|bigstockphoto|pngwing|pngtree|cleanpng|freepnglogos|kindpng|clipart/i;
+
 /**
  * Fetch a product packshot from Bing Image Search HTML.
  *
- * Uses an iPhone User-Agent so Bing serves a leaner mobile page while still
- * embedding full-resolution murl (media URL) entries in its JSON data island.
- * These are the actual source image URLs hosted on third-party sites.
+ * Query is tuned for maximum retail relevance:
+ *   - Quoted product name → exact phrase match
+ *   - "skincare serum bottle" → biases Bing toward product photography
+ *   - Negative keywords → eliminates food, wallpaper, anime, recipes
+ *   - qft photo filter → forces actual photographs, not graphic banners
  *
- * Resolution order:
- *   1. murl pattern  — full-res source image (e.g. from shopify/wordpress CDNs)
- *      Pattern: murl&quot;:&quot;<url>&quot; in the page's HTML source.
- *   2. Bing thumbnail CDN (tse*.mm.bing.net) — smaller but always https, always 200.
- *
- * Bing does NOT apply ASN-level blocks to datacenter IPs, making this
- * Render/Railway/Fly.io-safe. Zero cost, no API key required.
+ * Resolution tiers (no HEAD validation — geo-CDNs return 404/405 on HEAD
+ * but serve images correctly on GET; HEAD checks cause false negatives):
+ *   Tier 1 (strict)  — murl matching PACKSHOT_ALLOW, not PACKSHOT_DENY
+ *   Tier 1 (relaxed) — any non-denied murl (if strict finds nothing)
+ *   Tier 2           — Bing CDN thumbnail: th.bing.com or tse*.mm.bing.net
+ *                      Smaller resolution but guaranteed https + 200.
  *
  * @param {string} productName — normalised product name
- * @returns {Promise<string|null>} — https:// image URL, or null on miss/error
+ * @returns {Promise<string|null>} — https:// image URL, or null on total miss
  */
 async function fetchFromBing(productName) {
   try {
-    const q = encodeURIComponent(productName + ' skincare product');
-    const url = `https://www.bing.com/images/search?q=${q}&form=HDRSC3&first=1`;
+    // Strict retail query: quoted name + packshot signal + negatives + photo filter
+    const q = encodeURIComponent(
+      '"' + productName + '" skincare serum bottle -food -recipe -wallpaper -anime'
+    );
+    const url = 'https://www.bing.com/images/search?q=' + q + '&form=HDRSC3&first=1&qft=+filterui:photo-photo';
 
     const res = await fetch(url, {
-      signal: AbortSignal.timeout(3000),
+      signal: AbortSignal.timeout(7000),
       headers: {
         'User-Agent':
           'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
@@ -161,30 +179,40 @@ async function fetchFromBing(productName) {
 
     const html = await res.text();
 
-    // Primary: full-resolution source images embedded in Bing's JSON data island.
-    // murl = "media URL" — the original host's image, URL-encoded inside the HTML.
-    // Excludes Bing's own CDN (bing.net, microsoft.com) to prefer third-party sources.
+    // ── Tier 1: murl data island — full-res source images ─────────────────────
+    // Bing embeds media URLs in a JSON island as HTML-entity-encoded strings.
+    // Scan ALL candidates; classify by ALLOW/DENY; return first strict pass.
+    // Relaxed list collects non-denied candidates as fallback if strict fails.
     const murlRe = /murl&quot;:&quot;(https?:\/\/[^&"]+\.(?:jpe?g|png|webp)(?:\?[^&"]*)?)/gi;
     let m;
+    const relaxedCandidates = [];
+
     while ((m = murlRe.exec(html)) !== null) {
       const img = m[1];
-      if (
-        img &&
-        img.startsWith('https://') &&
-        !/bing\.net|microsoft\.com|bing\.com/i.test(img)
-      ) {
-        console.log(`[Bing] Resolved "${productName}" → ${img}`);
+      if (!img || !img.startsWith('https://') || /bing\.net|microsoft\.com|bing\.com/i.test(img)) continue;
+      if (PACKSHOT_DENY.test(img)) continue; // hard reject: stock / AI / food sites
+
+      if (PACKSHOT_ALLOW.test(img)) {
+        console.log(`[Bing T1] Resolved "${productName}" → ${img}`);
         return img;
       }
+      relaxedCandidates.push(img);
     }
 
-    // Fallback: Bing thumbnail CDN — smaller resolution but guaranteed https + 200
-    const tbnRe = /https:\/\/tse\d+\.mm\.bing\.net\/th\/id\/[A-Za-z0-9._%-]+/gi;
-    const tbnMatches = html.match(tbnRe);
-    if (tbnMatches && tbnMatches[0]) {
-      const tbnUrl = tbnMatches[0];
-      console.log(`[Bing] Thumbnail fallback for "${productName}" → ${tbnUrl}`);
-      return tbnUrl;
+    // Tier 1 relaxed: non-denied murl (general CDN not in allow list)
+    if (relaxedCandidates.length > 0) {
+      console.log(`[Bing T1r] Resolved "${productName}" → ${relaxedCandidates[0]}`);
+      return relaxedCandidates[0];
+    }
+
+    // ── Tier 2: Bing CDN thumbnail ─────────────────────────────────────────────
+    // th.bing.com: modern Bing CDN; tse*.mm.bing.net: legacy mobile CDN.
+    // Both are always https:// and return 200 on GET.
+    const bingCdnRe = /https:\/\/(?:th\.bing\.com\/th\/id|tse\d+\.mm\.bing\.net\/th\/id)\/[A-Za-z0-9._%-]+(?:\?[^"&\s]*)?/gi;
+    const cdnMatches = html.match(bingCdnRe);
+    if (cdnMatches && cdnMatches[0]) {
+      console.log(`[Bing T2] CDN thumbnail for "${productName}" → ${cdnMatches[0]}`);
+      return cdnMatches[0];
     }
 
     console.warn(`[Bing] No image found for "${productName}" (HTML: ${html.length} bytes)`);
