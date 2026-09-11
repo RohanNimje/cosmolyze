@@ -6,11 +6,14 @@
  *   GET  /api/scan/history       → Return last 20 scans for the authed user
  *   POST /api/scan/product-image → Resolve a commercial product packshot.
  *                                   Layer 1: MongoDB TTL cache   (~50ms)
- *                                   Layer 2: Nykaa search API    (~500ms, zero-cost)
+ *                                   Layer 2: Bing Image Search scraper (~800ms, zero-cost)
+ *                                            Extracts full-res source URLs from Bing's
+ *                                            murl data island using iPhone UA. Falls back
+ *                                            to Bing thumbnail CDN if no source URL found.
  *                                   Layer 3: { imageUrl: null, query } signal
  *                                            → client resolves from browser IP
  *   POST /api/scan/cache-image   → Client backfills MongoDB after browser-side
- *                                   Nykaa resolve, so next user gets cache HIT.
+ *                                   resolve, so next user gets cache HIT.
  */
 
 const express = require('express');
@@ -20,6 +23,31 @@ const User = require('../models/User');
 const CachedProduct = require('../models/CachedProduct');
 
 const router = express.Router();
+
+// ── Inflight stagger — prevents burst-drop under simultaneous requests ─────────
+// A lightweight 50ms gate ensures concurrent image lookups don't all hammer
+// Bing at the exact same millisecond, which can trigger rate limiting.
+const inflightRequests = new Map();
+const STAGGER_MS = 50;
+let lastFetchAt = 0;
+
+async function staggeredFetch(productKey, fetcher) {
+  // Coalesce duplicate in-flight requests for the same product
+  if (inflightRequests.has(productKey)) {
+    return inflightRequests.get(productKey);
+  }
+  // Apply 50ms stagger between requests
+  const now = Date.now();
+  const gap = now - lastFetchAt;
+  if (gap < STAGGER_MS) {
+    await new Promise((r) => setTimeout(r, STAGGER_MS - gap));
+  }
+  lastFetchAt = Date.now();
+
+  const promise = fetcher().finally(() => inflightRequests.delete(productKey));
+  inflightRequests.set(productKey, promise);
+  return promise;
+}
 
 // ── Fallback image (UI only — never written to MongoDB) ───────────────────────
 const FALLBACK_IMAGE = '/images/default-clinical-bottle.png';
@@ -92,55 +120,77 @@ function isDummyCachedImage(imageUrl) {
   );
 }
 
-// ── Nykaa Product Image Resolver ──────────────────────────────────────────────
+// ── Bing Image Search Scraper ─────────────────────────────────────────────────
 /**
- * Fetch the top commercial packshot from Nykaa's unauthenticated search endpoint.
- * This is the same API powering Nykaa's own web autocomplete — no key required.
+ * Fetch a product packshot from Bing Image Search HTML.
  *
- * Unlike DuckDuckGo, Nykaa does NOT apply ASN-level blocks to datacenter IPs
- * (Render, Railway, Fly.io), making it Render-safe with consistent < 1s latency.
+ * Uses an iPhone User-Agent so Bing serves a leaner mobile page while still
+ * embedding full-resolution murl (media URL) entries in its JSON data island.
+ * These are the actual source image URLs hosted on third-party sites.
+ *
+ * Resolution order:
+ *   1. murl pattern  — full-res source image (e.g. from shopify/wordpress CDNs)
+ *      Pattern: murl&quot;:&quot;<url>&quot; in the page's HTML source.
+ *   2. Bing thumbnail CDN (tse*.mm.bing.net) — smaller but always https, always 200.
+ *
+ * Bing does NOT apply ASN-level blocks to datacenter IPs, making this
+ * Render/Railway/Fly.io-safe. Zero cost, no API key required.
  *
  * @param {string} productName — normalised product name
  * @returns {Promise<string|null>} — https:// image URL, or null on miss/error
  */
-async function fetchFromNykaa(productName) {
+async function fetchFromBing(productName) {
   try {
-    const q = encodeURIComponent(productName);
-    const url = `https://www.nykaa.com/api/2/product/search?q=${q}&channel=web&page=1&pageSize=5`;
+    const q = encodeURIComponent(productName + ' skincare product');
+    const url = `https://www.bing.com/images/search?q=${q}&form=HDRSC3&first=1`;
+
     const res = await fetch(url, {
-      signal: AbortSignal.timeout(2500),
+      signal: AbortSignal.timeout(3000),
       headers: {
-        'User-Agent': 'Mozilla/5.0 (compatible; Cosmolyze/2.0)',
-        'Accept': 'application/json',
+        'User-Agent':
+          'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
       },
     });
 
     if (!res.ok) {
-      console.warn(`[Nykaa] HTTP ${res.status} for "${productName}"`);
+      console.warn(`[Bing] HTTP ${res.status} for "${productName}"`);
       return null;
     }
 
-    const data = await res.json();
-    // Nykaa API response shape varies across versions — handle known structures
-    const products = data?.products || data?.data?.products || [];
+    const html = await res.text();
 
-    for (const p of products) {
-      const img = p?.media?.[0]?.url || p?.imageUrl || p?.image_url || p?.image;
+    // Primary: full-resolution source images embedded in Bing's JSON data island.
+    // murl = "media URL" — the original host's image, URL-encoded inside the HTML.
+    // Excludes Bing's own CDN (bing.net, microsoft.com) to prefer third-party sources.
+    const murlRe = /murl&quot;:&quot;(https?:\/\/[^&"]+\.(?:jpe?g|png|webp)(?:\?[^&"]*)?)/gi;
+    let m;
+    while ((m = murlRe.exec(html)) !== null) {
+      const img = m[1];
       if (
         img &&
-        typeof img === 'string' &&
-        /^https?:\/\//i.test(img) &&
-        /\.(jpe?g|png|webp)(\?.*)?$/i.test(img)
+        img.startsWith('https://') &&
+        !/bing\.net|microsoft\.com|bing\.com/i.test(img)
       ) {
-        console.log(`[Nykaa] Resolved "${productName}" → ${img}`);
+        console.log(`[Bing] Resolved "${productName}" → ${img}`);
         return img;
       }
     }
 
-    console.warn(`[Nykaa] No valid packshot for "${productName}" (${products.length} products returned)`);
+    // Fallback: Bing thumbnail CDN — smaller resolution but guaranteed https + 200
+    const tbnRe = /https:\/\/tse\d+\.mm\.bing\.net\/th\/id\/[A-Za-z0-9._%-]+/gi;
+    const tbnMatches = html.match(tbnRe);
+    if (tbnMatches && tbnMatches[0]) {
+      const tbnUrl = tbnMatches[0];
+      console.log(`[Bing] Thumbnail fallback for "${productName}" → ${tbnUrl}`);
+      return tbnUrl;
+    }
+
+    console.warn(`[Bing] No image found for "${productName}" (HTML: ${html.length} bytes)`);
     return null;
   } catch (err) {
-    console.warn(`[Nykaa] Fetch error for "${productName}": ${err.message}`);
+    console.warn(`[Bing] Fetch error for "${productName}": ${err.message}`);
     return null;
   }
 }
@@ -179,10 +229,12 @@ async function persistProductImageCache(productKey, imageUrl) {
 //  Response: { success: true, imageUrl: string|null, fromCache: boolean, query?: string }
 //
 //  Resolution layers:
-//    1. MongoDB TTL cache   — instant, skips dummy/fallback entries
-//    2. Nykaa search API    — 2.5s timeout, Render-safe, zero-cost
-//    3. Null signal         — { imageUrl: null, query } tells the browser to
-//                             call Nykaa directly using the user's residential IP
+//    1. MongoDB TTL cache     — instant (~50ms), skips dummy/fallback entries
+//    2. Bing Image Search     — ~800ms, zero-cost, Render-safe (no ASN block)
+//                               Extracts murl (full-res source) from HTML data island;
+//                               falls back to Bing thumbnail CDN on miss.
+//    3. Null signal           — { imageUrl: null, query } tells the browser to
+//                               resolve client-side, then backfill via /cache-image
 // ─────────────────────────────────────────────────────────────────────────────
 router.post('/product-image', async (req, res) => {
   try {
@@ -212,8 +264,8 @@ router.post('/product-image', async (req, res) => {
       console.warn('[Scan] MongoDB cache read failed (non-fatal):', cacheErr.message);
     }
 
-    // ── Layer 2: Nykaa ────────────────────────────────────────────────────────
-    const imageUrl = await fetchFromNykaa(productKey);
+    // ── Layer 2: Bing Image Search (with 50ms inflight stagger) ──────────────
+    const imageUrl = await staggeredFetch(productKey, () => fetchFromBing(productKey));
 
     if (imageUrl) {
       // Persist so the next request for this product is a cache HIT
@@ -222,10 +274,9 @@ router.post('/product-image', async (req, res) => {
     }
 
     // ── Layer 3: Signal client-side fallback ──────────────────────────────────
-    // Return null + the original query string. The browser will call Nykaa
-    // directly using the user's residential IP (no ASN block), then backfill
-    // MongoDB via POST /api/scan/cache-image.
-    console.log(`[Scan] Nykaa miss for "${productKey}" — delegating to client-side resolver`);
+    // Return null + the original query string. The browser resolves client-side
+    // using the user's residential IP, then backfills MongoDB via /cache-image.
+    console.log(`[Scan] Bing miss for "${productKey}" — delegating to client-side resolver`);
     return res.status(200).json({
       success: true,
       imageUrl: null,
@@ -247,11 +298,12 @@ router.post('/product-image', async (req, res) => {
 //  POST /api/scan/cache-image
 //  Body: { productName: string, imageUrl: string }
 //
-//  Called silently by the browser after a client-side Nykaa resolve succeeds.
+//  Called silently by the browser after a client-side resolve succeeds.
 //  Persists the URL to MongoDB so future requests get a server-side cache HIT
 //  instead of triggering another client-side fetch.
 //
 //  Strict validation: only https:// raster URLs (.jpg/.jpeg/.png/.webp) accepted.
+//  Cache poisoning guard: FALLBACK_IMAGE is never written to MongoDB.
 // ─────────────────────────────────────────────────────────────────────────────
 router.post('/cache-image', async (req, res) => {
   try {
