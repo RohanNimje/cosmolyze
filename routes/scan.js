@@ -119,49 +119,84 @@ function isDummyCachedImage(imageUrl) {
   );
 }
 
-// ── Bing Image Search Scraper ─────────────────────────────────────────────────
+// ── Bing Image Search Scraper with Context Relevance Validation ──────────────
 
 /**
- * Tier 1 domain allow/deny lists for murl candidates.
- *
- * PACKSHOT_ALLOW: URL path signals strongly indicating a retail product image
- *   (e-commerce CDN slugs, brand slugs, well-known packaging keywords).
- * PACKSHOT_DENY:  Sites that exclusively serve stock photos, AI art,
- *   wallpapers, or food content — never a real product packshot.
+ * Known skincare brand registry for high-precision brand token extraction.
+ */
+const KNOWN_SKINCARE_BRANDS = [
+  'the ordinary', 'dot & key', 'dot and key', 'minimalist', 'be minimalist',
+  "l'oreal paris", "l'oreal", 'loreal paris', 'loreal', 'neutrogena',
+  'cerave', 'cetaphil', 'mamaearth', 'plum', 'lakme', 'himalaya', 'wow',
+  'vlcc', 'forest essentials', 'biotique', 'innisfree', 'the inkey list',
+  'inkey list', 'garnier', 'nivea', 'olay', 'ponds', 'vaseline', 'dove',
+  'stridex', 'skinceuticals', "paula's choice", 'paulas choice', 'cocokind',
+  'glow recipe', 'supergoop', 'tatcha', "kiehl's", 'kiehls', 'laneige',
+  'cosrx', 'pacifica', 'acnefree', 'clearasil', 'bioderma', 'la roche-posay',
+  'la roche posay', 'vichy', 'avene', 'caudalie', 'murad', 'dermalogica',
+  'clinique', 'estee lauder', 'lancome', 'shiseido', "dr. sheth's", 'dr sheths',
+  'foxtale', 'conscious chemist', 'deconstruct', 'chemist at play', 'aqualogica',
+  'derma co', 'the derma co'
+];
+
+/**
+ * Priority retail e-commerce domains and CDN paths (Amazon, Nykaa, Purplle, Tira, brand CDNs).
  */
 const PACKSHOT_ALLOW =
-  /cdn\.|shop\.|product|catalog|media|img\d*\.|images\d*\.|static\.|assets\.|store\.|upload|wp-content|wp-uploads|gallery|ecommerce|buyonline|pharma|beauty|health|loreal|neutrogena|cerave|ordinary|minimalist|mamaearth|dotandkey|plum|lakme|himalaya|beardo|wow|vlcc|forest|khadi|biotique|innisfree|inkey|garnier|nivea|olay|ponds|vaseline|dove|stridex|skinceuticals|paulaschoice|cocokind|glow|supergoop|tatcha|kiehl|laneige|cosrx|pacifica|acnefree|clearasil|bioderma|la.roche|vichy|avene|caudalie|murad|dermalogica|clinique|estee|lancome|shiseido/i;
-
-const PACKSHOT_DENY =
-  /wallpaper|recipe|school|anime|meme|food\.(?:com|net|org)|nutrition|cooking|restaurant|vecteezy|freepik\.com|shutterstock|alamy\.com|istockphoto|gettyimages|dreamstime|stockphoto|vectorstock|stablediffusion|midjourney|dalle|pixabay\.com|pexels\.com|unsplash\.com|mockupcloud|pinshop\.com|depositphotos|123rf\.com|bigstockphoto|pngwing|pngtree|cleanpng|freepnglogos|kindpng|clipart/i;
+  /amazon|media-amazon|ssl-images-amazon|nykaa|purplle|ppl-media|tirabeauty|myntassets|myntra|walmart|sephora|ulta|boots|target|walgreens|cvs|lookfantastic|cultbeauty|yesstyle|stylevana|clinikally|daraz|lazcdn|shopify|cdn\.shop|product|catalog|media|img\d*\.|images\d*\.|static\.|assets\.|store\.|upload|wp-content|wp-uploads|gallery|ecommerce|buyonline|pharma|beauty|health|loreal|neutrogena|cerave|ordinary|minimalist|beminimalist|mamaearth|dotandkey|plum|lakme|himalaya|beardo|wow|vlcc|forest|khadi|biotique|innisfree|inkey|garnier|nivea|olay|ponds|vaseline|dove|stridex|skinceuticals|paulaschoice|cocokind|glow|supergoop|tatcha|kiehl|laneige|cosrx|pacifica|acnefree|clearasil|bioderma|la.roche|vichy|avene|caudalie|murad|dermalogica|clinique|estee|lancome|shiseido|drsheths|foxtale|aqualogica/i;
 
 /**
- * Fetch a product packshot from Bing Image Search HTML.
- *
- * Query is tuned for maximum retail relevance:
- *   - Quoted product name → exact phrase match
- *   - "skincare serum bottle" → biases Bing toward product photography
- *   - Negative keywords → eliminates food, wallpaper, anime, recipes
- *   - qft photo filter → forces actual photographs, not graphic banners
- *
- * Resolution tiers (no HEAD validation — geo-CDNs return 404/405 on HEAD
- * but serve images correctly on GET; HEAD checks cause false negatives):
- *   Tier 1 (strict)  — murl matching PACKSHOT_ALLOW, not PACKSHOT_DENY
- *   Tier 1 (relaxed) — any non-denied murl (if strict finds nothing)
- *   Tier 2           — Bing CDN thumbnail: th.bing.com or tse*.mm.bing.net
- *                      Smaller resolution but guaranteed https + 200.
- *
- * @param {string} productName — normalised product name
- * @returns {Promise<string|null>} — https:// image URL, or null on total miss
+ * Hard reject list: stock photos, AI generators, video platforms, wallpapers, recipes, and user boards (Pinterest).
  */
-async function fetchFromBing(productName) {
-  try {
-    // Strict retail query: quoted name + packshot signal + negatives + photo filter
-    const q = encodeURIComponent(
-      '"' + productName + '" skincare serum bottle -food -recipe -wallpaper -anime'
-    );
-    const url = 'https://www.bing.com/images/search?q=' + q + '&form=HDRSC3&first=1&qft=+filterui:photo-photo';
+const PACKSHOT_DENY =
+  /pinterest|pinimg|pin\.it|youtube\.com|youtu\.be|ytimg\.com|tiktok\.com|vimeo\.com|wallpaper|recipe|school|anime|meme|food\.(?:com|net|org)|nutrition|cooking|restaurant|vecteezy|freepik\.com|shutterstock|alamy\.com|istockphoto|gettyimages|dreamstime|stockphoto|vectorstock|stablediffusion|midjourney|dalle|pixabay\.com|pexels\.com|unsplash\.com|mockupcloud|pinshop\.com|depositphotos|123rf\.com|bigstockphoto|pngwing|pngtree|cleanpng|freepnglogos|kindpng|clipart|behance\.net|dribbble\.com/i;
 
+const FILLER_WORDS = new Set([
+  'the', 'and', 'for', 'with', 'plus', 'bottle', 'packaging', 'retail', 'skincare',
+  'ml', 'fl', 'oz', 'pack', 'of'
+]);
+
+/**
+ * Split and sanitize the product query into brand, variant, and matching tokens.
+ */
+function parseProductTokens(productName) {
+  const norm = productName.toLowerCase().trim();
+  let brand = '';
+  let variant = norm;
+
+  for (const kb of KNOWN_SKINCARE_BRANDS) {
+    if (norm.startsWith(kb)) {
+      brand = kb;
+      variant = norm.slice(kb.length).trim();
+      break;
+    }
+  }
+
+  if (!brand) {
+    const parts = norm.split(' ');
+    brand = parts[0];
+    variant = parts.slice(1).join(' ');
+  }
+
+  const cleanStr = norm.replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ');
+  const rawTokens = cleanStr.split(' ').filter(t => t.length > 1);
+  const brandTokens = brand.replace(/[^a-z0-9\s]/g, ' ').split(' ').filter(t => t.length > 1 && !FILLER_WORDS.has(t));
+  const specificTokens = rawTokens.filter(t => !FILLER_WORDS.has(t));
+  const variantTokens = specificTokens.filter(t => !brandTokens.includes(t));
+
+  return {
+    brand,
+    variant,
+    brandTokens,
+    specificTokens: specificTokens.length > 0 ? specificTokens : rawTokens,
+    variantTokens: variantTokens.length > 0 ? variantTokens : specificTokens,
+  };
+}
+
+async function fetchBingCandidates(queryStr) {
+  try {
+    const q = encodeURIComponent(queryStr);
+    const url = `https://www.bing.com/images/search?q=${q}&form=HDRSC3&first=1&qft=+filterui:photo-photo`;
     const res = await fetch(url, {
       signal: AbortSignal.timeout(7000),
       headers: {
@@ -171,51 +206,140 @@ async function fetchFromBing(productName) {
         'Accept-Language': 'en-US,en;q=0.9',
       },
     });
-
-    if (!res.ok) {
-      console.warn(`[Bing] HTTP ${res.status} for "${productName}"`);
-      return null;
-    }
-
+    if (!res.ok) return [];
     const html = await res.text();
+    
+    const items = [];
+    const iuscRe = /class="iusc"[^>]*m="([^"]+)"/g;
+    let im;
+    while ((im = iuscRe.exec(html)) !== null) {
+      try {
+        items.push(JSON.parse(im[1].replace(/&quot;/g, '"')));
+      } catch {}
+    }
+    return items;
+  } catch (err) {
+    return [];
+  }
+}
 
-    // ── Tier 1: murl data island — full-res source images ─────────────────────
-    // Bing embeds media URLs in a JSON island as HTML-entity-encoded strings.
-    // Scan ALL candidates; classify by ALLOW/DENY; return first strict pass.
-    // Relaxed list collects non-denied candidates as fallback if strict fails.
-    const murlRe = /murl&quot;:&quot;(https?:\/\/[^&"]+\.(?:jpe?g|png|webp)(?:\?[^&"]*)?)/gi;
-    let m;
-    const relaxedCandidates = [];
+function matchCandidate(items, brandTokens, specificTokens, variantTokens) {
+  // Pass 1: Strict Retail CDN (Amazon, Nykaa, brand domains, etc.)
+  for (const item of items) {
+    const murl = item.murl;
+    if (!murl || !murl.startsWith('https://')) continue;
+    
+    const fullText = `${murl} ${item.purl || ''} ${item.t || ''} ${item.desc || ''}`.toLowerCase();
+    if (PACKSHOT_DENY.test(fullText) || PACKSHOT_DENY.test(murl)) continue;
 
-    while ((m = murlRe.exec(html)) !== null) {
-      const img = m[1];
-      if (!img || !img.startsWith('https://') || /bing\.net|microsoft\.com|bing\.com/i.test(img)) continue;
-      if (PACKSHOT_DENY.test(img)) continue; // hard reject: stock / AI / food sites
+    const brandMatch = brandTokens.length === 0 || brandTokens.some(bt => fullText.includes(bt));
+    const tokenHits = specificTokens.filter(t => fullText.includes(t));
+    const variantHits = variantTokens.filter(t => fullText.includes(t));
 
-      if (PACKSHOT_ALLOW.test(img)) {
-        console.log(`[Bing T1] Resolved "${productName}" → ${img}`);
-        return img;
+    const isRelevant = brandMatch && (variantHits.length >= 1 || tokenHits.length >= Math.min(2, specificTokens.length));
+    
+    if (isRelevant && PACKSHOT_ALLOW.test(murl)) {
+      return {
+        imageUrl: murl,
+        tier: 'Tier 1 (Strict Retail)',
+        tokenHits,
+        variantHits,
+        title: item.t,
+      };
+    }
+  }
+
+  // Pass 2: Relaxed non-denied murl
+  for (const item of items) {
+    const murl = item.murl;
+    if (!murl || !murl.startsWith('https://')) continue;
+    
+    const fullText = `${murl} ${item.purl || ''} ${item.t || ''} ${item.desc || ''}`.toLowerCase();
+    if (PACKSHOT_DENY.test(fullText) || PACKSHOT_DENY.test(murl)) continue;
+
+    const brandMatch = brandTokens.length === 0 || brandTokens.some(bt => fullText.includes(bt));
+    const tokenHits = specificTokens.filter(t => fullText.includes(t));
+    const variantHits = variantTokens.filter(t => fullText.includes(t));
+
+    const isRelevant = brandMatch && (variantHits.length >= 1 || tokenHits.length >= Math.min(2, specificTokens.length));
+
+    if (isRelevant) {
+      return {
+        imageUrl: murl,
+        tier: 'Tier 1 (Relaxed)',
+        tokenHits,
+        variantHits,
+        title: item.t,
+      };
+    }
+  }
+
+  // Pass 3: Tier 2 Bing CDN thumbnail
+  for (const item of items) {
+    const turl = item.turl || '';
+    const cleanTurl = turl.replace(/&amp;/g, '&');
+    if (!cleanTurl || !cleanTurl.startsWith('https://')) continue;
+
+    const fullText = `${item.murl || ''} ${cleanTurl} ${item.purl || ''} ${item.t || ''} ${item.desc || ''}`.toLowerCase();
+    if (PACKSHOT_DENY.test(fullText) || PACKSHOT_DENY.test(cleanTurl)) continue;
+
+    const brandMatch = brandTokens.length === 0 || brandTokens.some(bt => fullText.includes(bt));
+    const tokenHits = specificTokens.filter(t => fullText.includes(t));
+    const variantHits = variantTokens.filter(t => fullText.includes(t));
+
+    const isRelevant = brandMatch && (variantHits.length >= 1 || tokenHits.length >= Math.min(2, specificTokens.length));
+
+    if (isRelevant) {
+      return {
+        imageUrl: cleanTurl,
+        tier: 'Tier 2 (Bing CDN Thumbnail)',
+        tokenHits,
+        variantHits,
+        title: item.t,
+      };
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Fetch a product packshot from Bing Image Search HTML with high-precision validation.
+ *
+ * @param {string} productName — normalised product name
+ * @returns {Promise<string|null>} — https:// image URL, or null on total miss
+ */
+async function fetchFromBing(productName) {
+  try {
+    const { brand, variant, brandTokens, specificTokens, variantTokens } = parseProductTokens(productName);
+
+    const cleanVariant = variantTokens.map(t => t.replace(/^0+/, '')).filter(Boolean);
+    const coreVariant = cleanVariant.filter(t => !['solution', 'cream', 'serum', 'gel', 'lotion'].includes(t));
+
+    // High-precision queries cascade:
+    // 1. Quoted exact product name
+    // 2. Quoted brand + variant tokens
+    // 3. Quoted brand + core active/variant tokens
+    // 4. Unquoted brand + clean variant tokens
+    const queries = [
+      `"${productName}" retail bottle packaging -pinterest -food -recipe`,
+      `"${brand}" ${variantTokens.join(' ')} -pinterest -food -recipe`,
+      `"${brand}" ${coreVariant.join(' ')} -pinterest -food -recipe`,
+      `${brand} ${cleanVariant.join(' ')} -pinterest -food -recipe`,
+    ];
+
+    for (const qStr of queries) {
+      const items = await fetchBingCandidates(qStr);
+      if (!items || items.length === 0) continue;
+
+      const match = matchCandidate(items, brandTokens, specificTokens, variantTokens);
+      if (match) {
+        console.log(`[Bing] Resolved "${productName}" (${match.tier}) → ${match.imageUrl}`);
+        return match.imageUrl;
       }
-      relaxedCandidates.push(img);
     }
 
-    // Tier 1 relaxed: non-denied murl (general CDN not in allow list)
-    if (relaxedCandidates.length > 0) {
-      console.log(`[Bing T1r] Resolved "${productName}" → ${relaxedCandidates[0]}`);
-      return relaxedCandidates[0];
-    }
-
-    // ── Tier 2: Bing CDN thumbnail ─────────────────────────────────────────────
-    // th.bing.com: modern Bing CDN; tse*.mm.bing.net: legacy mobile CDN.
-    // Both are always https:// and return 200 on GET.
-    const bingCdnRe = /https:\/\/(?:th\.bing\.com\/th\/id|tse\d+\.mm\.bing\.net\/th\/id)\/[A-Za-z0-9._%-]+(?:\?[^"&\s]*)?/gi;
-    const cdnMatches = html.match(bingCdnRe);
-    if (cdnMatches && cdnMatches[0]) {
-      console.log(`[Bing T2] CDN thumbnail for "${productName}" → ${cdnMatches[0]}`);
-      return cdnMatches[0];
-    }
-
-    console.warn(`[Bing] No image found for "${productName}" (HTML: ${html.length} bytes)`);
+    console.warn(`[Bing] No validated image found for "${productName}"`);
     return null;
   } catch (err) {
     console.warn(`[Bing] Fetch error for "${productName}": ${err.message}`);
