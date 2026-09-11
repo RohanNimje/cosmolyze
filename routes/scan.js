@@ -4,11 +4,13 @@
  * Endpoints:
  *   POST /api/scan/save          → Persist a scan result + update user streak
  *   GET  /api/scan/history       → Return last 20 scans for the authed user
- *   POST /api/scan/product-image → Fetch a commercial product packshot via
- *                                   the Python image sidecar (FastAPI +
- *                                   duckduckgo_search) at IMAGE_SERVICE_URL.
- *                                   Falls over to FALLBACK_IMAGE if the
- *                                   sidecar is unreachable or returns 404.
+ *   POST /api/scan/product-image → Resolve a commercial product packshot.
+ *                                   Layer 1: MongoDB TTL cache   (~50ms)
+ *                                   Layer 2: Nykaa search API    (~500ms, zero-cost)
+ *                                   Layer 3: { imageUrl: null, query } signal
+ *                                            → client resolves from browser IP
+ *   POST /api/scan/cache-image   → Client backfills MongoDB after browser-side
+ *                                   Nykaa resolve, so next user gets cache HIT.
  */
 
 const express = require('express');
@@ -19,41 +21,7 @@ const CachedProduct = require('../models/CachedProduct');
 
 const router = express.Router();
 
-// ── In-Memory Concurrency Lock (Thundering Herd prevention) ──────────────────
-// Maps a normalised productName → Promise<string> (the inflight DDG fetch).
-const inflightRequests = new Map();
-
-// ── Sequential rate-limit queue (1000ms between product image fetches) ───────
-const DDG_FETCH_GAP_MS = 1000;
-let imageFetchChain = Promise.resolve();
-let lastDdgFetchAt = 0;
-
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
-/**
- * Run image lookups strictly one-after-another with a 1000ms gap.
- * Protects the local server IP from DuckDuckGo rate limits when
- * hydrating ~5 product cards after a scan.
- */
-function enqueueSequentialImageFetch(taskFn) {
-  const run = async () => {
-    const elapsed = Date.now() - lastDdgFetchAt;
-    const waitMs = Math.max(0, DDG_FETCH_GAP_MS - elapsed);
-    if (waitMs > 0) {
-      console.log(`[Scan] Sequential DDG delay ${waitMs}ms before next product fetch...`);
-      await sleep(waitMs);
-    }
-    lastDdgFetchAt = Date.now();
-    return taskFn();
-  };
-
-  const next = imageFetchChain.then(run, run);
-  // Keep the chain alive even if a task fails
-  imageFetchChain = next.catch(() => null);
-  return next;
-}
-
-// ── Fallback image when DuckDuckGo returns nothing usable ────────────────────
+// ── Fallback image (UI only — never written to MongoDB) ───────────────────────
 const FALLBACK_IMAGE = '/images/default-clinical-bottle.png';
 
 /** Answer strings that were mistakenly saved as card titles */
@@ -124,98 +92,55 @@ function isDummyCachedImage(imageUrl) {
   );
 }
 
-// ── Shared constants ─────────────────────────────────────────────────────────
-
+// ── Nykaa Product Image Resolver ──────────────────────────────────────────────
 /**
- * Base URL of the Python image sidecar (FastAPI + duckduckgo_search).
- * In production on Render set IMAGE_SERVICE_URL to the internal address
- * of the sidecar web service (e.g. http://cosmolyze-imgsvc:8001).
- * Defaults to localhost for local development.
+ * Fetch the top commercial packshot from Nykaa's unauthenticated search endpoint.
+ * This is the same API powering Nykaa's own web autocomplete — no key required.
+ *
+ * Unlike DuckDuckGo, Nykaa does NOT apply ASN-level blocks to datacenter IPs
+ * (Render, Railway, Fly.io), making it Render-safe with consistent < 1s latency.
+ *
+ * @param {string} productName — normalised product name
+ * @returns {Promise<string|null>} — https:// image URL, or null on miss/error
  */
-const IMAGE_SERVICE_URL = (process.env.IMAGE_SERVICE_URL || 'http://localhost:8001').replace(/\/$/, '');
-
-// ── Strict media rejection filter ────────────────────────────────────────────
-/**
- * Returns true if the title or URL indicates a non-product asset that should
- * never appear on a product card (newspaper clippings, portraits, documents,
- * logos, hand-held review photos, diagrams, etc.).
- *
- * Also enforces a raster-only extension allowlist: .jpg / .jpeg / .png / .webp.
- *
- * @param {string} [title=''] — file title or alt text from the API
- * @param {string} [url='']   — candidate image URL
- * @returns {boolean} true = reject this candidate
- */
-function isInvalidProductMedia(title = '', url = '') {
-  const BLACKLIST_TERMS = [
-    'newspaper', 'letter', 'article', 'journal', 'officer', 'military',
-    'portrait', 'founder', 'ceo', 'building', 'document', 'paper',
-    'text', 'screenshot', 'hand', 'holding', 'review', 'user',
-    'banner', 'logo', 'icon', 'diagram', 'chart',
-  ];
-
-  const haystack = `${title} ${url}`.toLowerCase();
-
-  if (BLACKLIST_TERMS.some((term) => haystack.includes(term))) return true;
-
-  // Only accept standard raster formats — reject SVG, GIF, PDF, TIFF, etc.
-  if (!/\.(jpe?g|png|webp)(\?.*)?$/i.test(url)) return true;
-
-  return false;
-}
-
-// ── Commercial Packshot Image Engine ───────────────────────────────────────────
-/**
- * Single-call packshot resolver: delegates to the Python image sidecar.
- *
- * The sidecar (image_service/main.py) uses the `duckduckgo_search` library
- * which manages vqd token acquisition, cookie jars, and retry backoff
- * internally via a persistent requests.Session. This is what allows it to
- * work from Render datacenter IPs where Node.js raw fetch() is ASN-blocked.
- *
- * Returns null (→ FALLBACK_IMAGE at call site) when:
- *   - The sidecar is unreachable (network error / not yet started)
- *   - The sidecar returns 404 (no valid image found)
- *   - The sidecar returns 502 (upstream DDG error)
- *
- * Never throws.
- *
- * @param {string} productName — already normalised (trim + lowercase)
- * @returns {Promise<string|null>}
- */
-async function fetchImageFromCSE(productName) {
+async function fetchFromNykaa(productName) {
   try {
-    console.log(`[ImageEngine] Requesting sidecar for: "${productName}"`);
-
-    const res = await fetch(`${IMAGE_SERVICE_URL}/image`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ product_name: productName }),
-      signal: AbortSignal.timeout(20000), // sidecar may need up to ~15s for DDG
+    const q = encodeURIComponent(productName);
+    const url = `https://www.nykaa.com/api/2/product/search?q=${q}&channel=web&page=1&pageSize=5`;
+    const res = await fetch(url, {
+      signal: AbortSignal.timeout(2500),
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (compatible; Cosmolyze/2.0)',
+        'Accept': 'application/json',
+      },
     });
 
-    if (res.status === 404) {
-      console.warn(`[ImageEngine] Sidecar: no image found for "${productName}"`);
-      return null;
-    }
-
     if (!res.ok) {
-      const body = await res.text().catch(() => '');
-      console.warn(`[ImageEngine] Sidecar returned HTTP ${res.status} for "${productName}": ${body}`);
+      console.warn(`[Nykaa] HTTP ${res.status} for "${productName}"`);
       return null;
     }
 
-    const data = await res.json().catch(() => null);
-    if (data?.image_url) {
-      console.log(`[ImageEngine] Resolved ${productName} -> ${data.image_url}`);
-      return data.image_url;
+    const data = await res.json();
+    // Nykaa API response shape varies across versions — handle known structures
+    const products = data?.products || data?.data?.products || [];
+
+    for (const p of products) {
+      const img = p?.media?.[0]?.url || p?.imageUrl || p?.image_url || p?.image;
+      if (
+        img &&
+        typeof img === 'string' &&
+        /^https?:\/\//i.test(img) &&
+        /\.(jpe?g|png|webp)(\?.*)?$/i.test(img)
+      ) {
+        console.log(`[Nykaa] Resolved "${productName}" → ${img}`);
+        return img;
+      }
     }
 
-    console.warn(`[ImageEngine] Sidecar response missing image_url for: "${productName}"`);
+    console.warn(`[Nykaa] No valid packshot for "${productName}" (${products.length} products returned)`);
     return null;
   } catch (err) {
-    // AbortError means the sidecar timed out; any other error means it's not running.
-    console.warn(`[ImageEngine] Sidecar unreachable for "${productName}": ${err.message}`);
+    console.warn(`[Nykaa] Fetch error for "${productName}": ${err.message}`);
     return null;
   }
 }
@@ -226,11 +151,10 @@ async function fetchImageFromCSE(productName) {
  * IMPORTANT: Deliberately skips the write when `imageUrl` is the local
  * fallback placeholder. Writing fallback URLs poisons the cache — the next
  * request would get a cache HIT on a placeholder and never retry the network.
- * Leaving the document absent is correct: the TTL cache miss logic triggers
+ * Leaving the document absent is correct: the cache miss logic triggers
  * a fresh lookup on the very next request.
  */
 async function persistProductImageCache(productKey, imageUrl) {
-  // Skip write for fallback/dummy URLs — never poison the cache.
   if (!imageUrl || isDummyCachedImage(imageUrl)) {
     console.log(`[Scan] Cache write SKIPPED for fallback URL: "${productKey}"`);
     return false;
@@ -251,15 +175,14 @@ async function persistProductImageCache(productKey, imageUrl) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  POST /api/scan/product-image
-//  Body: { productName: string }
-//  Response: { success: true, imageUrl: string, fromCache: boolean }
+//  Body:     { productName: string }
+//  Response: { success: true, imageUrl: string|null, fromCache: boolean, query?: string }
 //
-//  Flow:
-//    1. Check MongoDB cache — dummy fallback paths count as CACHE MISS
-//    2. Dedup inflight requests for the same product
-//    3. Sequential DuckDuckGo fetch (1000ms gap between products)
-//    4. Assign FALLBACK_IMAGE when DDG returns null
-//    5. ALWAYS overwrite MongoDB with the resolved imageUrl
+//  Resolution layers:
+//    1. MongoDB TTL cache   — instant, skips dummy/fallback entries
+//    2. Nykaa search API    — 2.5s timeout, Render-safe, zero-cost
+//    3. Null signal         — { imageUrl: null, query } tells the browser to
+//                             call Nykaa directly using the user's residential IP
 // ─────────────────────────────────────────────────────────────────────────────
 router.post('/product-image', async (req, res) => {
   try {
@@ -274,7 +197,7 @@ router.post('/product-image', async (req, res) => {
 
     const productKey = productName.trim().toLowerCase();
 
-    // ── Layer 1: MongoDB Cache Hit (dummy fallback = CACHE MISS) ─────────────
+    // ── Layer 1: MongoDB Cache ────────────────────────────────────────────────
     try {
       const cached = await CachedProduct.findOne({ productName: productKey }).lean();
       if (cached && cached.imageUrl && !isDummyCachedImage(cached.imageUrl)) {
@@ -285,76 +208,73 @@ router.post('/product-image', async (req, res) => {
           fromCache: true,
         });
       }
-      if (cached && isDummyCachedImage(cached.imageUrl)) {
-        console.log(
-          `[Scan] Cache MISS (dummy fallback) for: "${productKey}" — re-fetching from DuckDuckGo`
-        );
-      }
     } catch (cacheErr) {
       console.warn('[Scan] MongoDB cache read failed (non-fatal):', cacheErr.message);
     }
 
-    // ── Layer 2: In-Flight Deduplication Lock ─────────────────────────────────
-    if (inflightRequests.has(productKey)) {
-      console.log(`[Scan] Dedup lock HIT — awaiting existing promise for: "${productKey}"`);
-      try {
-        const imageUrl = (await inflightRequests.get(productKey)) || FALLBACK_IMAGE;
-        return res.status(200).json({ success: true, imageUrl, fromCache: false });
-      } catch {
-        return res.status(200).json({
-          success: true,
-          imageUrl: FALLBACK_IMAGE,
-          fromCache: false,
-        });
-      }
+    // ── Layer 2: Nykaa ────────────────────────────────────────────────────────
+    const imageUrl = await fetchFromNykaa(productKey);
+
+    if (imageUrl) {
+      // Persist so the next request for this product is a cache HIT
+      await persistProductImageCache(productKey, imageUrl);
+      return res.status(200).json({ success: true, imageUrl, fromCache: false });
     }
 
-    // ── Layer 3: Sequential DuckDuckGo fetch ──────────────────────────────────
-    let resolveInflight = () => { };
-    const inflightPromise = new Promise((resolve) => {
-      resolveInflight = resolve;
-    });
-    inflightRequests.set(productKey, inflightPromise);
-
-    let imageUrl = FALLBACK_IMAGE;
-    try {
-      const ddgResult = await enqueueSequentialImageFetch(() => fetchImageFromCSE(productKey));
-
-      if (!ddgResult || isDummyCachedImage(ddgResult)) {
-        imageUrl = FALLBACK_IMAGE;
-        console.log(`[Scan] Using fallback image for: "${productKey}" → ${FALLBACK_IMAGE}`);
-      } else {
-        imageUrl = ddgResult;
-      }
-
-      // ── Layer 4: Persist to MongoDB — only for real URLs, never fallback ──
-      if (imageUrl !== FALLBACK_IMAGE) {
-        await persistProductImageCache(productKey, imageUrl);
-      }
-      resolveInflight(imageUrl);
-    } catch (unexpectedErr) {
-      console.warn('[Scan] DuckDuckGo lookup failed, falling back safely:', unexpectedErr.message);
-      imageUrl = FALLBACK_IMAGE;
-      // Do NOT persist the fallback — let the cache stay empty so the next
-      // request triggers a fresh network attempt.
-      resolveInflight(imageUrl);
-    } finally {
-      inflightRequests.delete(productKey);
-    }
-
+    // ── Layer 3: Signal client-side fallback ──────────────────────────────────
+    // Return null + the original query string. The browser will call Nykaa
+    // directly using the user's residential IP (no ASN block), then backfill
+    // MongoDB via POST /api/scan/cache-image.
+    console.log(`[Scan] Nykaa miss for "${productKey}" — delegating to client-side resolver`);
     return res.status(200).json({
       success: true,
-      imageUrl,
+      imageUrl: null,
+      query: productName.trim(),
       fromCache: false,
     });
   } catch (err) {
     console.error('[Scan ProductImage Error]', err);
-    // Never hard-crash — JSON text / scan pipeline continues with fallback
     return res.status(200).json({
       success: true,
-      imageUrl: FALLBACK_IMAGE,
+      imageUrl: null,
+      query: req.body?.productName?.trim() || '',
       fromCache: false,
     });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  POST /api/scan/cache-image
+//  Body: { productName: string, imageUrl: string }
+//
+//  Called silently by the browser after a client-side Nykaa resolve succeeds.
+//  Persists the URL to MongoDB so future requests get a server-side cache HIT
+//  instead of triggering another client-side fetch.
+//
+//  Strict validation: only https:// raster URLs (.jpg/.jpeg/.png/.webp) accepted.
+// ─────────────────────────────────────────────────────────────────────────────
+router.post('/cache-image', async (req, res) => {
+  try {
+    const { productName, imageUrl } = req.body;
+
+    if (!productName || typeof productName !== 'string' || productName.trim().length < 2) {
+      return res.status(400).json({ success: false, message: 'productName required.' });
+    }
+    if (
+      !imageUrl ||
+      typeof imageUrl !== 'string' ||
+      !imageUrl.startsWith('https://') ||
+      !/\.(jpe?g|png|webp)(\?.*)?$/i.test(imageUrl)
+    ) {
+      return res.status(400).json({ success: false, message: 'Invalid imageUrl — must be https:// raster.' });
+    }
+
+    const productKey = productName.trim().toLowerCase();
+    await persistProductImageCache(productKey, imageUrl);
+    return res.status(200).json({ success: true });
+  } catch (err) {
+    console.warn('[Scan CacheImage Error]', err.message);
+    return res.status(200).json({ success: false });
   }
 });
 
