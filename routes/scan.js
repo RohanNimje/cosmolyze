@@ -75,73 +75,21 @@ function resolveScanDisplayTitle(rawTitle, aiResult = {}) {
   return 'Clinical Skin Analysis';
 }
 
-// ── Product Image Resolution Engines ──────────────────────────────────────────
+// ── Product Image Resolution Engine ───────────────────────────────────────────
 
 /**
- * Fetch a product packshot via the official Google Custom Search API.
+ * Fetch a commercial product packshot from live image indices.
  *
  * @param {string} productName — normalised product name
  * @returns {Promise<string|null>} — https:// image URL, or null on any failure
  */
-async function fetchFromGoogleCSE(productName) {
-  const apiKey = process.env.GOOGLE_SEARCH_API_KEY?.replace(/^"|"$/g, '').trim();
-  const cseId = process.env.GOOGLE_CSE_ID?.replace(/^"|"$/g, '').trim();
-
-  if (!apiKey || !cseId) {
-    console.warn('[CSE] GOOGLE_SEARCH_API_KEY or GOOGLE_CSE_ID not configured.');
-    return null;
-  }
-
-  try {
-    const cleaned = productName.replace(/[^a-zA-Z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
-    const query = encodeURIComponent(`${cleaned} cosmetic packaging bottle`);
-    const url = `https://www.googleapis.com/customsearch/v1?key=${apiKey}&cx=${cseId}&q=${query}&searchType=image&num=1`;
-
-    const res = await fetch(url, {
-      signal: AbortSignal.timeout(3500),
-      headers: { 'Accept': 'application/json' },
-    });
-
-    if (!res.ok) {
-      console.warn(`[CSE] API responded ${res.status} (${res.statusText}) for "${productName}"`);
-      return null;
-    }
-
-    const data = await res.json();
-    const items = data?.items;
-
-    if (!items || items.length === 0) {
-      console.warn(`[CSE] No results for "${productName}"`);
-      return null;
-    }
-
-    const imageUrl = items[0]?.link;
-    if (!imageUrl || !imageUrl.startsWith('https://')) {
-      console.warn(`[CSE] Invalid link in response for "${productName}"`);
-      return null;
-    }
-
-    console.log(`[CSE] Resolved "${productName}" → ${imageUrl}`);
-    return imageUrl;
-  } catch (err) {
-    console.warn(`[CSE] Fetch error for "${productName}": ${err.message}`);
-    return null;
-  }
-}
-
-/**
- * High-reliability secondary image engine (zero quota limits, fast fallback).
- *
- * @param {string} productName — normalised product name
- * @returns {Promise<string|null>} — https:// image URL, or null on any failure
- */
-async function fetchFromSecondaryEngine(productName) {
+async function fetchProductPackshotLive(productName) {
   try {
     const cleaned = productName.replace(/[^a-zA-Z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
     const q = `${cleaned} cosmetic packshot bottle`;
 
     const tokenRes = await fetch(`https://duckduckgo.com/?q=${encodeURIComponent(q)}&iax=images&ia=images`, {
-      signal: AbortSignal.timeout(3500),
+      signal: AbortSignal.timeout(4000),
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
@@ -150,37 +98,53 @@ async function fetchFromSecondaryEngine(productName) {
     });
 
     const html = await tokenRes.text();
-    const vqdMatch = html.match(/vqd=([\d-]+)/) || html.match(/vqd=["']([\d-]+)["']/);
-    if (!vqdMatch) return null;
+    const vqdMatch = html.match(/vqd=([\d-]+)/) || html.match(/vqd=["']([\d-]+)["']/) || html.match(/"vqd":\s*"([^"]+)"/);
+    if (!vqdMatch) {
+      console.warn(`[Image Engine] No token found for "${productName}"`);
+      return null;
+    }
     const vqd = vqdMatch[1];
 
     const imgRes = await fetch(`https://duckduckgo.com/i.js?l=us-en&o=json&q=${encodeURIComponent(q)}&vqd=${vqd}&f=,,,`, {
-      signal: AbortSignal.timeout(3500),
+      signal: AbortSignal.timeout(4000),
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-        'Accept': 'application/json',
+        'Accept': 'application/json, text/javascript, */*; q=0.01',
         'Referer': 'https://duckduckgo.com/',
       },
     });
 
-    const data = await imgRes.json();
+    if (!imgRes.ok) {
+      console.warn(`[Image Engine] Search index responded ${imgRes.status} for "${productName}"`);
+      return null;
+    }
+
+    const text = await imgRes.text();
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch {
+      console.warn(`[Image Engine] Response parsing failed for "${productName}"`);
+      return null;
+    }
+
     const results = data?.results || [];
 
     for (const item of results) {
       if (item?.image && item.image.startsWith('https://') && /\.(jpe?g|png|webp)(\?.*)?$/i.test(item.image)) {
-        console.log(`[Secondary Engine] Resolved "${productName}" → ${item.image}`);
+        console.log(`[Image Engine] Resolved "${productName}" → ${item.image}`);
         return item.image;
       }
     }
 
     if (results[0]?.image && results[0].image.startsWith('https://')) {
-      console.log(`[Secondary Engine] Resolved "${productName}" → ${results[0].image}`);
+      console.log(`[Image Engine] Resolved "${productName}" → ${results[0].image}`);
       return results[0].image;
     }
 
     return null;
   } catch (err) {
-    console.warn(`[Secondary Engine] Fetch error for "${productName}": ${err.message}`);
+    console.warn(`[Image Engine] Fetch error for "${productName}": ${err.message}`);
     return null;
   }
 }
@@ -218,9 +182,8 @@ async function persistProductImageCache(productKey, imageUrl) {
 //
 //  Resolution layers:
 //    1. MongoDB TTL cache     — instant (~15-50ms), skips dummy/fallback entries
-//    2. Google CSE API        — primary official search API (~400ms)
-//    3. Secondary Engine      — high-speed zero-quota fallback (~800ms)
-//    4. Null signal           — { imageUrl: null } — client renders fallback image
+//    2. Live Image Engine     — high-speed live search (~800ms)
+//    3. Null signal           — { imageUrl: null } — client renders fallback image
 // ─────────────────────────────────────────────────────────────────────────────
 router.post('/product-image', async (req, res) => {
   try {
@@ -250,13 +213,8 @@ router.post('/product-image', async (req, res) => {
       console.warn('[Scan] MongoDB cache read failed (non-fatal):', cacheErr.message);
     }
 
-    // ── Layer 2: Google Custom Search API ────────────────────────────────────
-    let imageUrl = await fetchFromGoogleCSE(productKey);
-
-    // ── Layer 3: Secondary Resilient Engine ──────────────────────────────────
-    if (!imageUrl) {
-      imageUrl = await fetchFromSecondaryEngine(productKey);
-    }
+    // ── Layer 2: Live Packshot Resolver ──────────────────────────────────────
+    const imageUrl = await fetchProductPackshotLive(productKey);
 
     if (imageUrl) {
       // Persist to MongoDB so the next request for this product is a cache HIT (~20ms)
@@ -264,7 +222,7 @@ router.post('/product-image', async (req, res) => {
       return res.status(200).json({ success: true, imageUrl, fromCache: false });
     }
 
-    // ── Layer 4: No result — return null signal ───────────────────────────────
+    // ── Layer 3: No result — return null signal ───────────────────────────────
     console.log(`[Scan] Resolution miss for "${productKey}" — returning null signal`);
     return res.status(200).json({
       success: true,
