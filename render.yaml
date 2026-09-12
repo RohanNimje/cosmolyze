@@ -40,3 +40,7 @@ services:
         sync: false
       - key: OPENROUTER_API_KEY
         sync: false
+      - key: GOOGLE_SEARCH_API_KEY
+        sync: false
+      - key: GOOGLE_CSE_ID
+        sync: false
