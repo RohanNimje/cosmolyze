@@ -2026,10 +2026,8 @@
          * Fetch a product image from POST /api/scan/product-image.
          *
          * Returns:
-         *   - A real https:// URL string when the server resolves via Nykaa or cache
-         *   - null when the server signals a client-side resolve is needed
-         *     (Nykaa miss on datacenter IP — caller must invoke resolveImageClientSide)
-         *   - FALLBACK_PRODUCT_IMAGE on network error or malformed response
+         *   - A real https:// URL string when the server resolves via Google CSE or cache
+         *   - FALLBACK_PRODUCT_IMAGE on network error, API miss, or malformed response
          */
         async function fetchProductImageUrl(productName) {
             if (!productName || String(productName).trim().length < 2) {
@@ -2056,49 +2054,9 @@
         }
 
         /**
-         * Client-side Nykaa resolver — called when the server returns imageUrl: null.
-         * Hits the Nykaa search API directly from the user's residential browser IP
-         * (no ASN block), then reveals the card image and silently backfills MongoDB
-         * via POST /api/scan/cache-image so the next user gets a cache hit.
-         *
-         * @param {string} productName
-         * @param {HTMLImageElement|null} imgEl
-         * @param {HTMLElement|null} frameEl
-         */
-        async function resolveImageClientSide(productName, imgEl, frameEl) {
-            if (!productName || String(productName).trim().length < 2) return;
-            try {
-                const q = encodeURIComponent(String(productName).trim());
-                const url = `https://www.nykaa.com/api/2/product/search?q=${q}&channel=web&page=1&pageSize=5`;
-                const res = await fetch(url, { headers: { 'Accept': 'application/json' } });
-                if (!res.ok) return;
-                const data = await res.json();
-                const products = data?.products || data?.data?.products || [];
-                let imageUrl = null;
-                for (const p of products) {
-                    const img = p?.media?.[0]?.url || p?.imageUrl || p?.image_url || p?.image;
-                    if (img && /^https?:\/\//i.test(img) && /\.(jpe?g|png|webp)(\?.*)?$/i.test(img)) {
-                        imageUrl = img;
-                        break;
-                    }
-                }
-                if (!imageUrl) return;
-                console.log(`[ClientImage] Nykaa resolved "${productName}" → ${imageUrl}`);
-                revealProductImage(imgEl, frameEl, imageUrl);
-                // Silent backfill so next user gets a server-side cache hit
-                fetch(`${API_BASE}/scan/cache-image`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ productName: String(productName).trim(), imageUrl }),
-                }).catch(() => {});
-            } catch {
-                // Silent — card keeps FALLBACK_PRODUCT_IMAGE
-            }
-        }
-
-        /**
          * Fetch a product image and reveal it on the given card elements.
-         * Handles the null-signal from the server by triggering resolveImageClientSide.
+         * A null imageUrl from the server (CSE miss) simply renders the fallback;
+         * no further client-side resolution is attempted.
          *
          * @param {{ name: string, imgId: string, frameId: string, obj: object }} task
          */
@@ -2106,21 +2064,15 @@
             const imgEl = document.getElementById(imgId);
             const frameEl = document.getElementById(frameId);
             const imageUrl = await fetchProductImageUrl(name);
-            if (imageUrl) {
-                obj.imageUrl = imageUrl;
-                revealProductImage(imgEl, frameEl, imageUrl);
-            } else {
-                // null → server Nykaa miss; show fallback then resolve from browser IP
-                obj.imageUrl = FALLBACK_PRODUCT_IMAGE;
-                revealProductImage(imgEl, frameEl, FALLBACK_PRODUCT_IMAGE);
-                resolveImageClientSide(name, imgEl, frameEl);
-            }
+            const resolved = imageUrl || FALLBACK_PRODUCT_IMAGE;
+            obj.imageUrl = resolved;
+            revealProductImage(imgEl, frameEl, resolved);
         }
 
-        /** Resolve imageUrl from mixed legacy / canonical payloads */
+        /** Resolve imageUrl from canonical payload shape. */
         function resolveImageUrl(obj) {
             if (!obj || typeof obj !== 'object') return FALLBACK_PRODUCT_IMAGE;
-            return obj.imageUrl || obj.image_url || obj.image || obj.product_image_url || FALLBACK_PRODUCT_IMAGE;
+            return obj.imageUrl || FALLBACK_PRODUCT_IMAGE;
         }
 
         async function handleSignup() {
@@ -3732,8 +3684,7 @@
 
         async function hydrateVerdictImages(winner, alts) {
             // Text/JSON verdict is already on screen — images hydrate with shimmer → fade-in.
-            // Cards are fired with a 150ms stagger so we avoid a simultaneous burst of
-            // 5 Nykaa requests, without the UX cost of strict serial awaiting.
+            // Cards are fired with a 150ms stagger to avoid a simultaneous API burst.
             const tasks = [];
             if (winner && winner.product_name) {
                 tasks.push({
