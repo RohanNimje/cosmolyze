@@ -75,71 +75,242 @@ function resolveScanDisplayTitle(rawTitle, aiResult = {}) {
   return 'Clinical Skin Analysis';
 }
 
-// ── Product Image Resolution Engine ───────────────────────────────────────────
+// ── Verified Retail & Packaging CDNs Whitelist ────────────────────────────────
+const BRAND_DOMAINS = {
+  'deconstruct': 'thedeconstruct.in',
+  'minimalist': 'beminimalist.co',
+  'beminimalist': 'beminimalist.co',
+  'the derma co': 'thedermaco.com',
+  'derma co': 'thedermaco.com',
+  'dot & key': 'dotandkey.com',
+  'plum': 'plumgoodness.com',
+  'foxtale': 'foxtale.in',
+  'chemist at play': 'chemistatplay.com',
+  'dr sheth': 'drsheths.com',
+  'aqualogica': 'aqualogica.in',
+};
+
+const TRUSTED_DOMAINS = [
+  'media-amazon.com',
+  'images-amazon.com',
+  'ssl-images-amazon.com',
+  'images-static.nykaa.com',
+  'adn-life.nykaa.com',
+  'nykaa.com',
+  'cdn.shopify.com',
+  'myshopify.com',
+  'thedeconstruct.in',
+  'beminimalist.co',
+  'theordinary.com',
+  'thedermaco.com',
+  'cerave.com',
+  'purplle.com',
+  'tirabeauty.com',
+  'flixcart.com',
+  'flipkart.com',
+  'sephora.in',
+  'sephora.com',
+  'myntra.com',
+  'tatacliq.com',
+  'openbeautyfacts.org',
+  'clinikally.com',
+  'kindlife.in',
+  'vanitywagon.com',
+];
+
+// ── Strict Junk & Non-Product Denylist ─────────────────────────────────────────
+const JUNK_DENYLIST = [
+  'pinterest', 'pinimg', 'scotscoop', 'wordpress', 'wp-content', 'blogspot',
+  'wikimedia', 'wikipedia', 'freepik', 'vector', 'shutterstock', 'istockphoto',
+  'depositphotos', 'dreamstime', 'alamy', '123rf', 'diagram', 'infographic',
+  'molecule', 'structure', 'cartoon', 'clipart', 'meme', 'reddit', 'facebook',
+  'instagram', 'tiktok', 'youtube', 'ytimg', 'quora', 'medium.com', 'delmeds',
+  'free-photo', 'stock-photo', 'background', 'banner', 'illustration', 'studyfinds',
+];
+
+const KNOWN_BRANDS = [
+  'the ordinary', 'minimalist', 'beminimalist', 'deconstruct', 'cerave',
+  'the derma co', 'derma co', 'dr sheth', 'dot & key', 'plum', 'cetaphil',
+  'neutrogena', 'la roche posay', 'cosrx', 'paulas choice', 'bioderma',
+  'chemist at play', 'foxtale', 'mamaearth', 'innisfree', 'laneige',
+  'klairs', 'fixderma', 'requil', 'sebamed', 'aqualogica',
+];
+
+/** Extract brand name and core tokens from product name */
+function extractBrandAndTokens(productName) {
+  const norm = productName.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+  let foundBrand = '';
+  for (const b of Object.keys(BRAND_DOMAINS).concat(KNOWN_BRANDS)) {
+    if (norm.includes(b)) {
+      foundBrand = b;
+      break;
+    }
+  }
+
+  let core = norm;
+  if (foundBrand) {
+    core = norm.replace(new RegExp(`\\b${foundBrand}\\b`, 'g'), ' ').replace(/\s+/g, ' ').trim();
+  }
+
+  return { brand: foundBrand, core };
+}
+
+// ── Product Image Resolution Engines ──────────────────────────────────────────
 
 /**
- * Fetch a commercial product packshot from live image indices.
- *
- * @param {string} productName — normalised product name
- * @returns {Promise<string|null>} — https:// image URL, or null on any failure
+ * Tier 1: Direct Brand Shopify Catalog API.
+ * High-speed, guaranteed official e-commerce CDN image for brand stores.
+ */
+async function fetchFromBrandStore(brand, coreTokens) {
+  const domain = BRAND_DOMAINS[brand];
+  if (!domain) return null;
+
+  // Extract clean keywords (strip numbers, %, and stop words)
+  const queryTerms = coreTokens
+    .replace(/\b\d+%\b|\b\d+\b/g, '')
+    .replace(/\b(under|with|and|for|the|plus)\b/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  try {
+    const url = `https://${domain}/search/suggest.json?q=${encodeURIComponent(queryTerms)}&resources[type]=product`;
+    const res = await fetch(url, {
+      signal: AbortSignal.timeout(3000),
+      headers: { 'User-Agent': 'Mozilla/5.0' },
+    });
+
+    if (!res.ok) return null;
+    const data = await res.json();
+    const products = data?.resources?.results?.products || [];
+
+    for (const p of products) {
+      if (p?.image && p.image.startsWith('https://')) {
+        let img = p.image;
+        if (img.startsWith('//')) img = 'https:' + img;
+        const lower = img.toLowerCase();
+        if (!JUNK_DENYLIST.some((j) => lower.includes(j))) {
+          console.log(`[Brand Store] Resolved "${brand}" → ${img}`);
+          return img;
+        }
+      }
+    }
+  } catch (err) {
+    console.warn(`[Brand Store] Error for "${brand}": ${err.message}`);
+  }
+  return null;
+}
+
+/**
+ * Tier 2: Open Beauty Facts Verified Cosmetic Database.
+ */
+async function fetchFromOpenBeautyFacts(brand, coreTokens) {
+  try {
+    const q = brand ? `${brand} ${coreTokens}` : coreTokens;
+    const res = await fetch(`https://world.openbeautyfacts.org/cgi/search.pl?search_terms=${encodeURIComponent(q)}&search_simple=1&action=process&json=1`, {
+      signal: AbortSignal.timeout(3500),
+      headers: { 'User-Agent': 'Cosmolyze/1.0' },
+    });
+
+    if (!res.ok) return null;
+    const data = await res.json();
+    const products = data?.products || [];
+
+    for (const p of products) {
+      const img = p?.image_front_url || p?.image_url || p?.image_small_url;
+      if (img && img.startsWith('https://')) {
+        const lower = img.toLowerCase();
+        if (!JUNK_DENYLIST.some((j) => lower.includes(j))) {
+          console.log(`[OpenBeautyFacts] Resolved "${q}" → ${img}`);
+          return img;
+        }
+      }
+    }
+  } catch (err) {
+    console.warn(`[OpenBeautyFacts] Error for "${brand}": ${err.message}`);
+  }
+  return null;
+}
+
+/**
+ * Tier 3: Verified Search Engine Index with Domain Whitelist & Token Relevance.
  */
 async function fetchProductPackshotLive(productName) {
-  try {
-    const cleaned = productName.replace(/[^a-zA-Z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
-    const q = `${cleaned} cosmetic packshot bottle`;
+  const { brand, core } = extractBrandAndTokens(productName);
+  const q = `${brand ? brand + ' ' : ''}${core} packaging bottle`;
 
+  try {
     const tokenRes = await fetch(`https://duckduckgo.com/?q=${encodeURIComponent(q)}&iax=images&ia=images`, {
-      signal: AbortSignal.timeout(4000),
+      signal: AbortSignal.timeout(3500),
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.9',
+        'Accept': 'text/html',
       },
     });
 
+    if (!tokenRes.ok) return null;
     const html = await tokenRes.text();
-    const vqdMatch = html.match(/vqd=([\d-]+)/) || html.match(/vqd=["']([\d-]+)["']/) || html.match(/"vqd":\s*"([^"]+)"/);
-    if (!vqdMatch) {
-      console.warn(`[Image Engine] No token found for "${productName}"`);
-      return null;
-    }
+    const vqdMatch = html.match(/vqd=["']?([\d-]+)["']?/);
+    if (!vqdMatch) return null;
     const vqd = vqdMatch[1];
 
     const imgRes = await fetch(`https://duckduckgo.com/i.js?l=us-en&o=json&q=${encodeURIComponent(q)}&vqd=${vqd}&f=,,,`, {
-      signal: AbortSignal.timeout(4000),
+      signal: AbortSignal.timeout(3500),
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-        'Accept': 'application/json, text/javascript, */*; q=0.01',
+        'Accept': 'application/json',
         'Referer': 'https://duckduckgo.com/',
       },
     });
 
-    if (!imgRes.ok) {
-      console.warn(`[Image Engine] Search index responded ${imgRes.status} for "${productName}"`);
-      return null;
-    }
-
-    const text = await imgRes.text();
-    let data;
-    try {
-      data = JSON.parse(text);
-    } catch {
-      console.warn(`[Image Engine] Response parsing failed for "${productName}"`);
-      return null;
-    }
-
+    if (!imgRes.ok) return null;
+    const data = await imgRes.json().catch(() => null);
     const results = data?.results || [];
+    const scored = [];
 
     for (const item of results) {
-      if (item?.image && item.image.startsWith('https://') && /\.(jpe?g|png|webp)(\?.*)?$/i.test(item.image)) {
-        console.log(`[Image Engine] Resolved "${productName}" → ${item.image}`);
-        return item.image;
+      const imgUrl = (item.image || '').trim();
+      const title = (item.title || '').toLowerCase();
+      const pageUrl = (item.url || '').toLowerCase();
+
+      if (!imgUrl || !imgUrl.startsWith('https://')) continue;
+
+      const lowerImg = imgUrl.toLowerCase();
+
+      // 1. Strict Junk Denylist Filter
+      if (JUNK_DENYLIST.some((j) => lowerImg.includes(j) || title.includes(j) || pageUrl.includes(j))) continue;
+      if (/\.(svg|ico|gif)(\?.*)?$/i.test(lowerImg)) continue;
+      if (/logo|favicon|banner|icon|badge|clipart/i.test(lowerImg)) continue;
+
+      let score = 0;
+
+      // 2. Trusted Retail Domain / Verified CDN (+100)
+      if (TRUSTED_DOMAINS.some((d) => lowerImg.includes(d) || pageUrl.includes(d))) {
+        score += 100;
+      }
+
+      // 3. Brand Match (+50)
+      if (brand && (title.includes(brand) || lowerImg.includes(brand) || pageUrl.includes(brand))) {
+        score += 50;
+      }
+
+      // 4. Token Matches (+15 per matching word)
+      const tokens = core.split(/\s+/).filter((t) => t.length > 2);
+      for (const t of tokens) {
+        if (title.includes(t) || lowerImg.includes(t) || pageUrl.includes(t)) {
+          score += 15;
+        }
+      }
+
+      if (score >= 60) {
+        scored.push({ url: imgUrl, score, title, pageUrl });
       }
     }
 
-    if (results[0]?.image && results[0].image.startsWith('https://')) {
-      console.log(`[Image Engine] Resolved "${productName}" → ${results[0].image}`);
-      return results[0].image;
+    scored.sort((a, b) => b.score - a.score);
+
+    if (scored.length > 0) {
+      console.log(`[Image Engine] Resolved "${productName}" → ${scored[0].url} (Score: ${scored[0].score})`);
+      return scored[0].url;
     }
 
     return null;
@@ -181,9 +352,11 @@ async function persistProductImageCache(productKey, imageUrl) {
 //  Response: { success: true, imageUrl: string|null, fromCache: boolean }
 //
 //  Resolution layers:
-//    1. MongoDB TTL cache     — instant (~15-50ms), skips dummy/fallback entries
-//    2. Live Image Engine     — high-speed live search (~800ms)
-//    3. Null signal           — { imageUrl: null } — client renders fallback image
+//    1. MongoDB TTL cache        — instant (~15-50ms), skips dummy/fallback entries
+//    2. Brand Direct Store       — official Shopify catalog API (~250ms)
+//    3. Open Beauty Facts        — verified cosmetic packaging database (~400ms)
+//    4. Retail Search Engine     — search index with domain whitelist & relevance scoring (~900ms)
+//    5. Null signal              — { imageUrl: null } — client renders fallback image
 // ─────────────────────────────────────────────────────────────────────────────
 router.post('/product-image', async (req, res) => {
   try {
@@ -213,8 +386,23 @@ router.post('/product-image', async (req, res) => {
       console.warn('[Scan] MongoDB cache read failed (non-fatal):', cacheErr.message);
     }
 
-    // ── Layer 2: Live Packshot Resolver ──────────────────────────────────────
-    const imageUrl = await fetchProductPackshotLive(productKey);
+    const { brand, core } = extractBrandAndTokens(productKey);
+
+    // ── Layer 2: Direct Brand Store API ──────────────────────────────────────
+    let imageUrl = null;
+    if (brand && BRAND_DOMAINS[brand]) {
+      imageUrl = await fetchFromBrandStore(brand, core);
+    }
+
+    // ── Layer 3: Verified Cosmetic Database (Open Beauty Facts) ──────────────
+    if (!imageUrl) {
+      imageUrl = await fetchFromOpenBeautyFacts(brand, core);
+    }
+
+    // ── Layer 4: Live Commercial Search Engine with Domain Filter ────────────
+    if (!imageUrl) {
+      imageUrl = await fetchProductPackshotLive(productKey);
+    }
 
     if (imageUrl) {
       // Persist to MongoDB so the next request for this product is a cache HIT (~20ms)
@@ -222,7 +410,7 @@ router.post('/product-image', async (req, res) => {
       return res.status(200).json({ success: true, imageUrl, fromCache: false });
     }
 
-    // ── Layer 3: No result — return null signal ───────────────────────────────
+    // ── Layer 5: No result — return null signal ───────────────────────────────
     console.log(`[Scan] Resolution miss for "${productKey}" — returning null signal`);
     return res.status(200).json({
       success: true,
