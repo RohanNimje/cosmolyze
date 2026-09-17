@@ -1936,26 +1936,42 @@
 
         /**
          * Fetch a product image from POST /api/scan/product-image.
-         * Strict response key: { imageUrl: string }
+         * Always sends productName + brand. Coalesces identical in-flight requests
+         * so hydration and saveScanResult share one network call.
          */
-        async function fetchProductImageUrl(productName) {
-            if (!productName || String(productName).trim().length < 2) {
+        const productImageInflight = new Map();
+        async function fetchProductImageUrl(productName, brand) {
+            const name = String(productName || '').trim();
+            const brandName = String(brand || '').trim();
+            if (name.length < 2) {
                 return FALLBACK_PRODUCT_IMAGE;
             }
-            try {
-                const res = await fetch(`${API_BASE}/scan/product-image`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ productName: String(productName).trim() }),
-                });
-                const json = await res.json();
-                if (json && typeof json.imageUrl === 'string' && json.imageUrl.length > 0) {
-                    return json.imageUrl;
-                }
-            } catch (err) {
-                console.warn('[ProductImage] fetch failed:', err.message);
+            const inflightKey = `${name.toLowerCase()}|${brandName.toLowerCase()}`;
+            if (productImageInflight.has(inflightKey)) {
+                return productImageInflight.get(inflightKey);
             }
-            return FALLBACK_PRODUCT_IMAGE;
+            const request = (async () => {
+                try {
+                    const res = await fetch(`${API_BASE}/scan/product-image`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ productName: name, brand: brandName }),
+                    });
+                    const json = await res.json();
+                    if (json && typeof json.imageUrl === 'string' && json.imageUrl.length > 0) {
+                        return json.imageUrl;
+                    }
+                } catch (err) {
+                    console.warn('[ProductImage] fetch failed:', err.message);
+                }
+                return FALLBACK_PRODUCT_IMAGE;
+            })();
+            productImageInflight.set(inflightKey, request);
+            try {
+                return await request;
+            } finally {
+                productImageInflight.delete(inflightKey);
+            }
         }
 
         /** Resolve imageUrl from mixed legacy / canonical payloads */
@@ -2745,9 +2761,13 @@
                         ...json.data,
                         detected_concerns: questionnaireData.detected_concerns,
                     });
-                    saveScanResult(concern, {
-                        ...json.data,
-                        detected_concerns: questionnaireData.detected_concerns || [],
+                    // Defer save until winner image inflight is shared/coalesced —
+                    // saveScanResult reuses fetchProductImageUrl, it must not start first.
+                    queueMicrotask(() => {
+                        saveScanResult(concern, {
+                            ...json.data,
+                            detected_concerns: questionnaireData.detected_concerns || [],
+                        });
                     });
                     return json.data;
                 } catch (err) {
@@ -3385,7 +3405,7 @@
         async function hydrateVerdictImages(winner, alts) {
             // Text/JSON verdict is already on screen — images hydrate with shimmer → fade-in
             if (winner && winner.product_name) {
-                const imageUrl = await fetchProductImageUrl(winner.product_name);
+                const imageUrl = await fetchProductImageUrl(winner.product_name, winner.brand);
                 winner.imageUrl = imageUrl;
                 revealProductImage(
                     document.getElementById('winner-product-img'),
@@ -3397,7 +3417,7 @@
             for (let i = 0; i < (alts || []).length; i++) {
                 const alt = alts[i];
                 if (!alt || !alt.product_name) continue;
-                const imageUrl = await fetchProductImageUrl(alt.product_name);
+                const imageUrl = await fetchProductImageUrl(alt.product_name, alt.brand);
                 alt.imageUrl = imageUrl;
                 revealProductImage(
                     document.getElementById(`alt-product-img-${i}`),
@@ -3427,7 +3447,7 @@
                 // Ensure we have a canonical imageUrl before persisting
                 let imageUrl = w.imageUrl || resolveImageUrl(w);
                 if (!imageUrl || imageUrl === FALLBACK_PRODUCT_IMAGE) {
-                    imageUrl = await fetchProductImageUrl(w.product_name);
+                    imageUrl = await fetchProductImageUrl(w.product_name, w.brand);
                     w.imageUrl = imageUrl;
                 }
 
@@ -3667,6 +3687,7 @@
 
             const winner = (scan.ai_full_json_result && scan.ai_full_json_result.top_winner) || {};
             const productName = winner.product_name || '';
+            const productBrand = winner.brand || '';
             const imgSrc = resolveImageUrl({
                 imageUrl: scan.imageUrl || winner.imageUrl,
                 image_url: scan.scan_image_url || winner.image_url,
@@ -3710,7 +3731,7 @@
             `;
 
             if (productName) {
-                fetchProductImageUrl(productName).then((imageUrl) => {
+                fetchProductImageUrl(productName, productBrand).then((imageUrl) => {
                     revealProductImage(
                         card.querySelector(`#${imgId}`),
                         card.querySelector(`#${frameId}`),
@@ -3825,8 +3846,9 @@
             try {
                 const winner = ai_full_json_result.top_winner || {};
                 let scan_image_url = winner.imageUrl || null;
-                if (!scan_image_url && winner.product_name) {
-                    scan_image_url = await fetchProductImageUrl(winner.product_name);
+                // Join the in-flight hydration request — never start a second lookup.
+                if ((!scan_image_url || scan_image_url === FALLBACK_PRODUCT_IMAGE) && winner.product_name) {
+                    scan_image_url = await fetchProductImageUrl(winner.product_name, winner.brand);
                     winner.imageUrl = scan_image_url;
                 }
 

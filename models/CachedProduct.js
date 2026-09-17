@@ -1,12 +1,11 @@
 /**
  * models/CachedProduct.js — MongoDB TTL Cache for Product Images
  *
- * Stores the resolved DuckDuckGo image URL keyed by normalised product name.
- * TTL index auto-expires documents after 30 days (2592000 seconds) so the
- * cache stays fresh without any manual cleanup jobs.
+ * Stores the resolved live https packshot URL keyed by brand + product name.
+ * TTL index auto-expires documents after 30 days (2592000 seconds).
  *
- * Note: local fallback paths (default-clinical-bottle.png) are treated as
- * cache misses by routes/scan.js and will be overwritten with live URLs.
+ * Dummy fallback paths must NEVER be written here — routes/scan.js only upserts
+ * whitelist-verified https URLs.
  */
 
 const mongoose = require('mongoose');

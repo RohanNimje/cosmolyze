@@ -4,9 +4,10 @@
  * Endpoints:
  *   POST /api/scan/save          → Persist a scan result + update user streak
  *   GET  /api/scan/history       → Return last 20 scans for the authed user
- *   POST /api/scan/product-image → Fetch a product image via DuckDuckGo with
- *                                   MongoDB TTL caching, sequential rate-limit,
- *                                   and concurrency dedup
+ *   POST /api/scan/product-image → Resolve a packshot via Google CSE (DDG
+ *                                   fallback), MongoDB TTL cache, whitelist
+ *                                   gate, sequential rate-limit, inflight dedup.
+ *                                   Fallback paths are NEVER written to MongoDB.
  */
 
 const express = require('express');
@@ -18,41 +19,74 @@ const CachedProduct = require('../models/CachedProduct');
 const router = express.Router();
 
 // ── In-Memory Concurrency Lock (Thundering Herd prevention) ──────────────────
-// Maps a normalised productName → Promise<string> (the inflight DDG fetch).
+// Maps cache key → Promise<string|null> (live https URL or null on miss).
 const inflightRequests = new Map();
 
 // ── Sequential rate-limit queue (1000ms between product image fetches) ───────
-const DDG_FETCH_GAP_MS = 1000;
+const IMAGE_FETCH_GAP_MS = 1000;
+const SEARCH_TIMEOUT_MS = 8000;
 let imageFetchChain = Promise.resolve();
-let lastDdgFetchAt = 0;
+let lastImageFetchAt = 0;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-/**
- * Run image lookups strictly one-after-another with a 1000ms gap.
- * Protects the local server IP from DuckDuckGo rate limits when
- * hydrating ~5 product cards after a scan.
- */
 function enqueueSequentialImageFetch(taskFn) {
   const run = async () => {
-    const elapsed = Date.now() - lastDdgFetchAt;
-    const waitMs = Math.max(0, DDG_FETCH_GAP_MS - elapsed);
+    const elapsed = Date.now() - lastImageFetchAt;
+    const waitMs = Math.max(0, IMAGE_FETCH_GAP_MS - elapsed);
     if (waitMs > 0) {
-      console.log(`[Scan] Sequential DDG delay ${waitMs}ms before next product fetch...`);
+      console.log(`[Scan] Sequential image delay ${waitMs}ms before next product fetch...`);
       await sleep(waitMs);
     }
-    lastDdgFetchAt = Date.now();
+    lastImageFetchAt = Date.now();
     return taskFn();
   };
 
   const next = imageFetchChain.then(run, run);
-  // Keep the chain alive even if a task fails
   imageFetchChain = next.catch(() => null);
   return next;
 }
 
-// ── Fallback image when DuckDuckGo returns nothing usable ────────────────────
+// ── Client-only fallback — never persisted to CachedProduct ──────────────────
 const FALLBACK_IMAGE = '/images/default-clinical-bottle.png';
+
+const IMAGE_HOST_ALLOWLIST = [
+  'media-amazon.com',
+  'ssl-images-amazon.com',
+  'images-amazon.com',
+  'amazon.com',
+  'amazon.in',
+  'nykaa.com',
+  'images-static.nykaa.com',
+  'purplle.com',
+  'flixcart.com',
+  'rukminim1.flixcart.com',
+  'rukminim2.flixcart.com',
+  'myntassets.com',
+  'myntra.com',
+  'sephora.com',
+  'ulta.com',
+  'cdn.shopify.com',
+  'cloudinary.com',
+  'googleusercontent.com',
+  'loreal.com',
+  'lorealparisusa.com',
+  'lorealparis.co.in',
+  'cerave.com',
+  'bioderma.com',
+  'theordinary.com',
+  'deciem.com',
+  'laroche-posay.us',
+  'laroche-posay.in',
+  'laroche-posay.com',
+  'cetaphil.com',
+  'neutrogena.com',
+  'dotandkey.com',
+  'beminimalist.co',
+  'minimalist.com',
+  'plumgoodness.com',
+  'mamaearth.in',
+];
 
 /** Answer strings that were mistakenly saved as card titles */
 const JUNK_SCAN_TITLES = new Set([
@@ -111,15 +145,92 @@ function resolveScanDisplayTitle(rawTitle, aiResult = {}) {
   return 'Clinical Skin Analysis';
 }
 
-/** Dummy/local fallback paths are treated as CACHE MISS so we re-fetch live URLs. */
 function isDummyCachedImage(imageUrl) {
   if (!imageUrl || typeof imageUrl !== 'string') return true;
   const normalized = imageUrl.trim().toLowerCase();
   return (
+    !normalized.startsWith('https://') ||
     normalized === FALLBACK_IMAGE.toLowerCase() ||
     normalized.endsWith('/images/default-clinical-bottle.png') ||
-    normalized.includes('default-clinical-bottle')
+    normalized.includes('default-clinical-bottle') ||
+    normalized.startsWith('data:') ||
+    normalized.includes('placeholder')
   );
+}
+
+function hostMatchesAllowlist(hostname) {
+  const host = String(hostname || '').toLowerCase().replace(/^www\./, '');
+  return IMAGE_HOST_ALLOWLIST.some(
+    (allowed) => host === allowed || host.endsWith(`.${allowed}`)
+  );
+}
+
+/** Only live https packshots on verified retail / brand CDNs may be cached. */
+function isCachableImageUrl(imageUrl) {
+  if (!imageUrl || typeof imageUrl !== 'string') return false;
+  const trimmed = imageUrl.trim();
+  if (isDummyCachedImage(trimmed)) return false;
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol !== 'https:') return false;
+    return hostMatchesAllowlist(parsed.hostname);
+  } catch {
+    return false;
+  }
+}
+
+function foldBrand(brand) {
+  return String(brand || '')
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/['’‘´`]/g, "'")
+    .trim();
+}
+
+function sanitizeProductName(productName) {
+  return String(productName || '')
+    .replace(/%/g, ' ')
+    .replace(/\+/g, ' ')
+    .replace(
+      /\b\d+(?:\.\d+)?\s*(?:fl\.?\s*oz|ml|mL|l|ltr|litres?|liters?|kg|g|gm|gr|grams?|oz)\b/gi,
+      ' '
+    )
+    .replace(/[^a-zA-Z0-9\s'-]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function buildImageSearchQuery(brand, productName) {
+  const cleanBrand = foldBrand(brand);
+  const cleanName = sanitizeProductName(productName);
+  const merged = [cleanBrand, cleanName].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
+  return `${merged} official packaging`;
+}
+
+function buildCacheKey(brand, productName) {
+  return [foldBrand(brand), String(productName || '').trim()]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+}
+
+function fallbackPayload() {
+  return {
+    success: true,
+    imageUrl: FALLBACK_IMAGE,
+    fallback: true,
+    fromCache: false,
+  };
+}
+
+async function fetchWithTimeout(url, options = {}, timeoutMs = SEARCH_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 const DDG_HEADERS = {
@@ -137,7 +248,7 @@ const DDG_HEADERS = {
 async function fetchDuckDuckGoVqd(query) {
   try {
     const url = `https://duckduckgo.com/?q=${encodeURIComponent(query)}`;
-    const res = await fetch(url, {
+    const res = await fetchWithTimeout(url, {
       method: 'GET',
       headers: {
         ...DDG_HEADERS,
@@ -170,74 +281,117 @@ async function fetchDuckDuckGoVqd(query) {
   }
 }
 
+function pickWhitelistedCandidate(candidates, logLabel) {
+  for (const candidate of candidates) {
+    if (isCachableImageUrl(candidate)) {
+      console.log(`[Scan] ${logLabel} image accepted: ${candidate}`);
+      return candidate;
+    }
+  }
+  return null;
+}
+
+async function fetchImageFromGoogleCSE(searchQuery) {
+  const apiKey = String(process.env.GOOGLE_CSE_API_KEY || process.env.GOOGLE_API_KEY || '').trim();
+  const cx = String(process.env.GOOGLE_CSE_CX || process.env.GOOGLE_CSE_ID || '').trim();
+  if (!apiKey || !cx) return null;
+
+  const endpoint =
+    'https://www.googleapis.com/customsearch/v1?' +
+    new URLSearchParams({
+      key: apiKey,
+      cx,
+      q: searchQuery,
+      searchType: 'image',
+      num: '8',
+      safe: 'active',
+      imgType: 'photo',
+    }).toString();
+
+  const res = await fetchWithTimeout(endpoint, {
+    method: 'GET',
+    headers: { Accept: 'application/json' },
+  });
+
+  if (!res.ok) {
+    console.warn(`[Scan] Google CSE failed — status ${res.status}`);
+    return null;
+  }
+
+  const data = await res.json().catch(() => null);
+  const items = Array.isArray(data?.items) ? data.items : [];
+  const candidates = items
+    .map((item) => item?.link)
+    .filter((url) => typeof url === 'string');
+
+  return pickWhitelistedCandidate(candidates, 'Google CSE');
+}
+
+async function fetchImageFromDuckDuckGo(searchQuery) {
+  const vqd = await fetchDuckDuckGoVqd(searchQuery);
+  if (!vqd) {
+    console.warn('[Scan] DuckDuckGo lookup failed, falling back safely — missing vqd');
+    return null;
+  }
+
+  const ijsUrl =
+    `https://duckduckgo.com/i.js` +
+    `?l=us-en` +
+    `&o=json` +
+    `&q=${encodeURIComponent(searchQuery)}` +
+    `&vqd=${encodeURIComponent(vqd)}` +
+    `&f=,,,` +
+    `&p=1`;
+
+  const res = await fetchWithTimeout(ijsUrl, { method: 'GET', headers: DDG_HEADERS });
+  if (!res.ok) {
+    console.warn(`[Scan] DuckDuckGo lookup failed, falling back safely — i.js status ${res.status}`);
+    return null;
+  }
+
+  const data = await res.json().catch(() => null);
+  const results = Array.isArray(data?.results) ? data.results : [];
+  const candidates = results.flatMap((item) =>
+    [item?.image, item?.thumbnail, item?.url].filter((url) => typeof url === 'string')
+  );
+
+  return pickWhitelistedCandidate(candidates, 'DuckDuckGo');
+}
+
 /**
- * Fetch a product image via DuckDuckGo's free i.js image endpoint.
- * Function name retained for call-site compatibility.
- * Never throws — returns a live image URL string, or null on any failure.
- *
- * @param {string} productName — already normalised (trim + lowercase)
+ * Resolve a live packshot URL. Never throws.
  * @returns {Promise<string|null>}
  */
-async function fetchImageFromCSE(productName) {
+async function fetchImageFromCSE(searchQuery) {
   try {
-    const query = `${productName} product packaging bottle`;
-    console.log(`[Scan] DuckDuckGo image lookup for: "${productName}"`);
+    console.log(`[Scan] Image lookup query: "${searchQuery}"`);
+    const cseResult = await fetchImageFromGoogleCSE(searchQuery);
+    if (cseResult) return cseResult;
 
-    const vqd = await fetchDuckDuckGoVqd(query);
-    if (!vqd) {
-      console.warn('[Scan] DuckDuckGo lookup failed, falling back safely — missing vqd');
-      return null;
-    }
+    console.warn('[Scan] Google CSE miss/unavailable — trying DuckDuckGo fallback');
+    const ddgResult = await fetchImageFromDuckDuckGo(searchQuery);
+    if (ddgResult) return ddgResult;
 
-    const ijsUrl =
-      `https://duckduckgo.com/i.js` +
-      `?l=us-en` +
-      `&o=json` +
-      `&q=${encodeURIComponent(query)}` +
-      `&vqd=${encodeURIComponent(vqd)}` +
-      `&f=,,,` +
-      `&p=1`;
-
-    const res = await fetch(ijsUrl, { method: 'GET', headers: DDG_HEADERS });
-
-    if (!res.ok) {
-      console.warn(
-        `[Scan] DuckDuckGo lookup failed, falling back safely — i.js status ${res.status}`
-      );
-      return null;
-    }
-
-    const data = await res.json().catch(() => null);
-    const results = Array.isArray(data?.results) ? data.results : [];
-
-    // Prefer full-size `image`, then thumbnail
-    for (const item of results) {
-      const candidate = item?.image || item?.thumbnail || item?.url;
-      if (typeof candidate === 'string' && /^https?:\/\//i.test(candidate)) {
-        console.log(`[Scan] DuckDuckGo image fetched successfully for: "${productName}"`);
-        return candidate;
-      }
-    }
-
-    console.warn(
-      `[Scan] DuckDuckGo lookup failed, falling back safely — no image results for: "${productName}"`
-    );
+    console.warn(`[Scan] No whitelisted image for query: "${searchQuery}"`);
     return null;
   } catch (err) {
-    console.warn('[Scan] DuckDuckGo lookup failed, falling back safely:', err.message);
+    console.warn('[Scan] Image lookup failed, falling back safely:', err.message);
     return null;
   }
 }
 
 /**
- * Persist product image (real or fallback) to MongoDB cache.
- * Always runs — never skips the DB write pipeline.
+ * Persist ONLY verified live https URLs. Dummy/null/http never touch MongoDB.
  */
 async function persistProductImageCache(productKey, imageUrl) {
+  if (!isCachableImageUrl(imageUrl)) {
+    console.log(`[Scan] Skip cache write (not a live whitelisted URL) for: "${productKey}"`);
+    return false;
+  }
   try {
     await CachedProduct.findOneAndUpdate(
       { productName: productKey },
-      { productName: productKey, imageUrl },
+      { productName: productKey, imageUrl: imageUrl.trim() },
       { upsert: true, returnDocument: 'after' }
     );
     console.log(`[Scan] Cached image for: "${productKey}" → ${imageUrl}`);
@@ -250,19 +404,19 @@ async function persistProductImageCache(productKey, imageUrl) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  POST /api/scan/product-image
-//  Body: { productName: string }
-//  Response: { success: true, imageUrl: string, fromCache: boolean }
+//  Body: { productName: string, brand: string }
+//  Response: { success: true, imageUrl: string, fromCache: boolean, fallback?: true }
 //
 //  Flow:
-//    1. Check MongoDB cache — dummy fallback paths count as CACHE MISS
-//    2. Dedup inflight requests for the same product
-//    3. Sequential DuckDuckGo fetch (1000ms gap between products)
-//    4. Assign FALLBACK_IMAGE when DDG returns null
-//    5. ALWAYS overwrite MongoDB with the resolved imageUrl
+//    1. Dedup inflight requests for the same brand+name (before any await)
+//    2. Mongo HIT only for live https whitelist URLs
+//    3. Sequential Google CSE fetch (sanitized brand + name)
+//    4. Persist ONLY cachable https URLs — never fallback/null
+//    5. Miss → return FALLBACK_IMAGE with fallback:true, no DB write
 // ─────────────────────────────────────────────────────────────────────────────
 router.post('/product-image', async (req, res) => {
   try {
-    const { productName } = req.body;
+    const { productName, brand } = req.body;
 
     if (!productName || typeof productName !== 'string' || productName.trim().length < 2) {
       return res.status(400).json({
@@ -271,86 +425,78 @@ router.post('/product-image', async (req, res) => {
       });
     }
 
-    const productKey = productName.trim().toLowerCase();
+    const productKey = buildCacheKey(brand, productName);
+    const searchQuery = buildImageSearchQuery(brand, productName);
 
-    // ── Layer 1: MongoDB Cache Hit (dummy fallback = CACHE MISS) ─────────────
-    try {
-      const cached = await CachedProduct.findOne({ productName: productKey }).lean();
-      if (cached && cached.imageUrl && !isDummyCachedImage(cached.imageUrl)) {
-        console.log(`[Scan] Cache HIT for: "${productKey}"`);
-        return res.status(200).json({
-          success: true,
-          imageUrl: cached.imageUrl,
-          fromCache: true,
-        });
-      }
-      if (cached && isDummyCachedImage(cached.imageUrl)) {
-        console.log(
-          `[Scan] Cache MISS (dummy fallback) for: "${productKey}" — re-fetching from DuckDuckGo`
-        );
-      }
-    } catch (cacheErr) {
-      console.warn('[Scan] MongoDB cache read failed (non-fatal):', cacheErr.message);
-    }
-
-    // ── Layer 2: In-Flight Deduplication Lock ─────────────────────────────────
     if (inflightRequests.has(productKey)) {
       console.log(`[Scan] Dedup lock HIT — awaiting existing promise for: "${productKey}"`);
       try {
-        const imageUrl = (await inflightRequests.get(productKey)) || FALLBACK_IMAGE;
-        return res.status(200).json({ success: true, imageUrl, fromCache: false });
+        const liveUrl = await inflightRequests.get(productKey);
+        if (isCachableImageUrl(liveUrl)) {
+          return res.status(200).json({
+            success: true,
+            imageUrl: liveUrl,
+            fromCache: false,
+          });
+        }
+        return res.status(200).json(fallbackPayload());
       } catch {
-        return res.status(200).json({
-          success: true,
-          imageUrl: FALLBACK_IMAGE,
-          fromCache: false,
-        });
+        return res.status(200).json(fallbackPayload());
       }
     }
 
-    // ── Layer 3: Sequential DuckDuckGo fetch ──────────────────────────────────
     let resolveInflight = () => { };
     const inflightPromise = new Promise((resolve) => {
       resolveInflight = resolve;
     });
     inflightRequests.set(productKey, inflightPromise);
 
-    let imageUrl = FALLBACK_IMAGE;
     try {
-      const ddgResult = await enqueueSequentialImageFetch(() => fetchImageFromCSE(productKey));
-
-      if (!ddgResult || isDummyCachedImage(ddgResult)) {
-        imageUrl = FALLBACK_IMAGE;
-        console.log(`[Scan] Using fallback image for: "${productKey}" → ${FALLBACK_IMAGE}`);
-      } else {
-        imageUrl = ddgResult;
+      try {
+        const cached = await CachedProduct.findOne({ productName: productKey }).lean();
+        if (cached && isCachableImageUrl(cached.imageUrl)) {
+          console.log(`[Scan] Cache HIT for: "${productKey}"`);
+          resolveInflight(cached.imageUrl);
+          return res.status(200).json({
+            success: true,
+            imageUrl: cached.imageUrl,
+            fromCache: true,
+          });
+        }
+        if (cached) {
+          console.log(
+            `[Scan] Cache MISS (uncacheable/dummy) for: "${productKey}" — re-fetching live image`
+          );
+        }
+      } catch (cacheErr) {
+        console.warn('[Scan] MongoDB cache read failed (non-fatal):', cacheErr.message);
       }
 
-      // ── Layer 4: ALWAYS overwrite MongoDB (live URL or fallback) ────────────
-      await persistProductImageCache(productKey, imageUrl);
-      resolveInflight(imageUrl);
+      const liveUrl = await enqueueSequentialImageFetch(() => fetchImageFromCSE(searchQuery));
+
+      if (isCachableImageUrl(liveUrl)) {
+        await persistProductImageCache(productKey, liveUrl);
+        resolveInflight(liveUrl);
+        return res.status(200).json({
+          success: true,
+          imageUrl: liveUrl,
+          fromCache: false,
+        });
+      }
+
+      console.log(`[Scan] Using client-only fallback for: "${productKey}" (no DB write)`);
+      resolveInflight(null);
+      return res.status(200).json(fallbackPayload());
     } catch (unexpectedErr) {
-      console.warn('[Scan] DuckDuckGo lookup failed, falling back safely:', unexpectedErr.message);
-      imageUrl = FALLBACK_IMAGE;
-      await persistProductImageCache(productKey, imageUrl);
-      resolveInflight(imageUrl);
+      console.warn('[Scan] Image lookup failed, falling back safely:', unexpectedErr.message);
+      resolveInflight(null);
+      return res.status(200).json(fallbackPayload());
     } finally {
       inflightRequests.delete(productKey);
     }
-
-    return res.status(200).json({
-      success: true,
-      imageUrl,
-      fromCache: false,
-    });
   } catch (err) {
     console.error('[Scan ProductImage Error]', err);
-    // Never hard-crash — JSON text / scan pipeline continues with fallback
-    return res.status(200).json({
-      success: true,
-      imageUrl: FALLBACK_IMAGE,
-      fromCache: false,
-    });
+    return res.status(200).json(fallbackPayload());
   }
 });
 
