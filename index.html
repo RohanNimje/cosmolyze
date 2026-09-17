@@ -1938,8 +1938,18 @@
          * Fetch a product image from POST /api/scan/product-image.
          * Always sends productName + brand. Coalesces identical in-flight requests
          * so hydration and saveScanResult share one network call.
+         *
+         * Strict validation: only a live https:// URL is returned. If the backend
+         * signals a miss (fallback: true) or the URL is not https://, the client-side
+         * FALLBACK_PRODUCT_IMAGE constant is returned instead.
          */
         const productImageInflight = new Map();
+
+        /** Returns true only for live https:// packshot URLs (not fallback paths). */
+        function isLiveImageUrl(url) {
+            return typeof url === 'string' && url.startsWith('https://');
+        }
+
         async function fetchProductImageUrl(productName, brand) {
             const name = String(productName || '').trim();
             const brandName = String(brand || '').trim();
@@ -1958,7 +1968,9 @@
                         body: JSON.stringify({ productName: name, brand: brandName }),
                     });
                     const json = await res.json();
-                    if (json && typeof json.imageUrl === 'string' && json.imageUrl.length > 0) {
+                    // Strictly validate: only trust a live https:// URL; never accept
+                    // the fallback path (e.g. /images/default-clinical-bottle.png).
+                    if (json && !json.fallback && isLiveImageUrl(json.imageUrl)) {
                         return json.imageUrl;
                     }
                 } catch (err) {
@@ -3404,8 +3416,24 @@
 
         async function hydrateVerdictImages(winner, alts) {
             // Text/JSON verdict is already on screen — images hydrate with shimmer → fade-in
+
+            // ── Hero / Winner image ──────────────────────────────────────────────
+            // The winner fires first, before the backend sequential queue is warm.
+            // If we get a miss on the first attempt, we wait 1.5 s and retry once
+            // so that the backend CSE rate-limit queue has time to settle — giving
+            // the hero product the same reliable fetch path as the alternatives.
             if (winner && winner.product_name) {
-                const imageUrl = await fetchProductImageUrl(winner.product_name, winner.brand);
+                let imageUrl = await fetchProductImageUrl(winner.product_name, winner.brand);
+                if (!isLiveImageUrl(imageUrl)) {
+                    console.log('[ProductImage] Winner miss on first attempt — retrying in 1.5 s...');
+                    await new Promise((r) => setTimeout(r, 1500));
+                    imageUrl = await fetchProductImageUrl(winner.product_name, winner.brand);
+                    if (!isLiveImageUrl(imageUrl)) {
+                        console.log('[ProductImage] Winner retry also missed — using fallback.');
+                    } else {
+                        console.log('[ProductImage] Winner retry succeeded:', imageUrl);
+                    }
+                }
                 winner.imageUrl = imageUrl;
                 revealProductImage(
                     document.getElementById('winner-product-img'),
@@ -3413,7 +3441,8 @@
                     imageUrl
                 );
             }
-            // Sequential requests so the backend 1000ms rate-limit queue stays orderly
+
+            // ── Alternative images — sequential so the backend 1000 ms gap stays orderly
             for (let i = 0; i < (alts || []).length; i++) {
                 const alt = alts[i];
                 if (!alt || !alt.product_name) continue;
