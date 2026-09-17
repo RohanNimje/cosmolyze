@@ -595,6 +595,49 @@
             background: rgba(148, 211, 193, 0.12);
             border-color: rgba(148, 211, 193, 0.5);
         }
+        /* ── Clinical White Camera Modal ──────────────────────────────────────── */
+
+        /* Shared: white-flash overlay when shutter fires */
+        @keyframes shutterFlash {
+            0%   { opacity: 0; }
+            18%  { opacity: 0.9; }
+            100% { opacity: 0; }
+        }
+
+        /* Modal card glide-in */
+        @keyframes modalSlideUp {
+            from { opacity: 0; transform: translateY(20px) scale(0.975); }
+            to   { opacity: 1; transform: translateY(0)    scale(1); }
+        }
+
+        /* Oval face guide breathing pulse */
+        @keyframes ovalBreath {
+            0%,100% { border-color: rgba(6,78,59,0.45); box-shadow: 0 0 0 0 rgba(6,78,59,0); }
+            50%      { border-color: rgba(6,78,59,0.75); box-shadow: 0 0 0 6px rgba(6,78,59,0.06); }
+        }
+
+        #cosmo-cam-modal-inner {
+            animation: modalSlideUp 0.3s cubic-bezier(0.22, 1, 0.36, 1) both;
+        }
+
+        #cam-oval-guide {
+            animation: ovalBreath 2.6s ease-in-out infinite;
+        }
+
+        #cam-capture-btn {
+            transition: background 0.15s ease, transform 0.14s cubic-bezier(0.34,1.56,0.64,1), box-shadow 0.15s ease;
+        }
+        #cam-capture-btn:hover  { background: #043d2e !important; box-shadow: 0 6px 20px rgba(6,78,59,0.28); }
+        #cam-capture-btn:active { transform: scale(0.95); }
+
+        #cam-switch-btn, #cam-cancel-btn {
+            transition: color 0.15s ease;
+        }
+
+        #cam-flash-overlay {
+            pointer-events: none;
+            animation: shutterFlash 0.26s ease-out forwards;
+        }
     </style>
     <!-- html2pdf.js for client-side PDF export -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
@@ -1715,8 +1758,113 @@
     </div>
 
     <!-- ── Hidden File Inputs (Camera & Gallery) ── -->
+    <!-- camera-input: mobile fallback only – desktop uses #cosmo-cam-modal -->
     <input type="file" id="camera-input" accept="image/*" capture="environment" style="display:none;" />
     <input type="file" id="gallery-input" accept="image/*" style="display:none;" />
+
+    <!-- ══════════════════════════════════════════════════════════════════════
+         LUXURY CLINICAL WEBCAM CAPTURE MODAL
+         Desktop/Laptop only — mobile uses the native camera-input above.
+    ══════════════════════════════════════════════════════════════════════ -->
+    <div id="cosmo-cam-modal"
+        class="fixed inset-0 z-[200] hidden items-center justify-center p-4"
+        style="background: rgba(0,0,0,0.50); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);"
+        role="dialog" aria-modal="true" aria-label="Live Camera Capture">
+
+        <!-- White clinical card -->
+        <div id="cosmo-cam-modal-inner"
+            class="bg-white w-full rounded-3xl overflow-hidden"
+            style="max-width:520px; box-shadow: 0 24px 64px rgba(0,0,0,0.18), 0 2px 12px rgba(0,0,0,0.08);">
+
+            <!-- ── Header ── -->
+            <div class="flex items-center justify-between px-5 pt-5 pb-4 border-b border-slate-100">
+                <div class="flex items-center gap-3">
+                    <!-- Camera icon -->
+                    <div class="flex items-center justify-center w-9 h-9 rounded-xl bg-emerald-50 border border-emerald-100 flex-shrink-0">
+                        <span class="material-symbols-outlined text-[#064e3b]" style="font-size:18px;font-variation-settings:'FILL' 1;">photo_camera</span>
+                    </div>
+                    <div>
+                        <p class="text-slate-900 font-semibold text-base leading-tight">Live Device Camera</p>
+                        <p class="text-slate-500 text-xs font-normal leading-tight mt-0.5">Position your face in the center of the frame</p>
+                    </div>
+                </div>
+                <!-- Close button -->
+                <button id="cam-close-btn"
+                    class="text-slate-400 hover:text-slate-600 p-1 rounded-lg hover:bg-slate-100 transition-colors"
+                    aria-label="Close camera">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                </button>
+            </div>
+
+            <!-- ── Video viewfinder ── -->
+            <div class="px-5 pt-4 pb-3">
+                <div id="cam-viewfinder" class="relative rounded-2xl overflow-hidden bg-slate-900"
+                    style="aspect-ratio:4/3;">
+
+                    <!-- Live video (mirrored) -->
+                    <video id="cam-video" autoplay playsinline muted
+                        class="w-full h-full object-cover"
+                        style="transform:scaleX(-1); display:block;"></video>
+
+                    <!-- Hidden capture canvas -->
+                    <canvas id="cam-canvas" style="display:none;"></canvas>
+
+                    <!-- Oval face-alignment guide -->
+                    <div class="absolute inset-0 flex items-center justify-center pointer-events-none">
+                        <div class="relative flex items-center justify-center" style="width:58%;height:72%;">
+                            <!-- The oval border -->
+                            <div id="cam-oval-guide"
+                                class="absolute inset-0 rounded-[50%] border-2 border-dashed"
+                                style="border-color:rgba(6,78,59,0.55);"></div>
+
+                            <!-- Pill badge centered at top of oval -->
+                            <div class="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1/2">
+                                <span class="bg-white text-emerald-800 border border-emerald-100 shadow-sm rounded-full px-2.5 py-0.5"
+                                    style="font-size:11px;font-weight:600;white-space:nowrap;font-family:'Inter',sans-serif;">Center Face Here</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Flash overlay injected by JS -->
+                </div>
+            </div>
+
+            <!-- ── Permission error (hidden by default) ── -->
+            <div id="cam-error-msg" class="hidden px-5 pb-2">
+                <p class="text-center text-xs font-medium text-red-500 bg-red-50 border border-red-100 rounded-xl py-2.5 px-3">
+                    Camera access denied or unavailable. Please allow permissions in your browser settings.
+                </p>
+            </div>
+
+            <!-- ── Bottom action bar ── -->
+            <div class="flex items-center justify-between px-5 pb-5 pt-2">
+
+                <!-- Left: Switch Camera -->
+                <button id="cam-switch-btn"
+                    class="flex items-center gap-1.5 text-xs text-slate-600 hover:text-slate-900 font-medium py-2 px-3 rounded-xl hover:bg-slate-100 transition-all"
+                    aria-label="Switch camera">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 4v6h6"/><path d="M23 20v-6h-6"/><path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4-4.64 4.36A9 9 0 0 1 3.51 15"/></svg>
+                    Switch
+                </button>
+
+                <!-- Center: Primary Capture -->
+                <button id="cam-capture-btn"
+                    class="flex items-center gap-2 text-white text-sm font-medium px-6 py-2.5 rounded-xl shadow-md active:scale-95"
+                    style="background:#064e3b;"
+                    aria-label="Capture photo">
+                    <span class="material-symbols-outlined" style="font-size:16px;font-variation-settings:'FILL' 1;">photo_camera</span>
+                    Capture Photo
+                </button>
+
+                <!-- Right: Cancel -->
+                <button id="cam-cancel-btn"
+                    class="text-xs text-slate-500 hover:text-slate-800 font-medium py-2 px-3 rounded-xl hover:bg-slate-100 transition-all"
+                    aria-label="Cancel">
+                    Cancel
+                </button>
+            </div>
+        </div>
+    </div>
 
     <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
 
@@ -1887,7 +2035,10 @@
             const intent = sessionStorage.getItem('postLoginIntent');
             if (intent && localStorage.getItem('token')) {
                 sessionStorage.removeItem('postLoginIntent');
-                if (intent === 'camera') document.getElementById('camera-input').click();
+                if (intent === 'camera') {
+                    // On desktop, open the premium webcam modal; on mobile, use native picker
+                    if (isDesktop()) { openCameraModal(); } else { document.getElementById('camera-input').click(); }
+                }
                 else if (intent === 'gallery') document.getElementById('gallery-input').click();
             }
         }
@@ -2310,12 +2461,23 @@
             return canvas.toDataURL('image/jpeg', 0.8);
         }
 
+        // ── Desktop detection: pointer-coarse = touch device, pointer-fine = mouse ──
+        function isDesktop() {
+            // Touch-only / mobile devices expose coarse pointer; desktops have fine pointer
+            return window.matchMedia('(pointer: fine)').matches;
+        }
+
         function triggerCamera() {
-            if (localStorage.getItem('token')) {
-                document.getElementById('camera-input').click();
-            } else {
+            if (!localStorage.getItem('token')) {
                 sessionStorage.setItem('postLoginIntent', 'camera');
                 openAuthModal();
+                return;
+            }
+            if (isDesktop()) {
+                openCameraModal();
+            } else {
+                // Mobile: use native camera picker
+                document.getElementById('camera-input').click();
             }
         }
 
@@ -2327,6 +2489,170 @@
                 openAuthModal();
             }
         }
+
+        // ══════════════════════════════════════════════════════════════════════
+        //  CLINICAL WHITE WEBCAM CAPTURE — MODAL ENGINE
+        // ══════════════════════════════════════════════════════════════════════
+
+        let _camStream = null;
+        let _camFacingMode = 'user'; // 'user' = front, 'environment' = back
+
+        /** Immediately stop all webcam tracks and clear the video src */
+        function _camRelease() {
+            if (_camStream) {
+                _camStream.getTracks().forEach(t => t.stop());
+                _camStream = null;
+            }
+            const video = document.getElementById('cam-video');
+            if (video) video.srcObject = null;
+        }
+
+        /** Start (or restart) the webcam with the current _camFacingMode */
+        async function _camStart() {
+            const video  = document.getElementById('cam-video');
+            const errMsg = document.getElementById('cam-error-msg');
+            _camRelease();
+            if (errMsg) errMsg.classList.add('hidden');
+            try {
+                let stream;
+                try {
+                    stream = await navigator.mediaDevices.getUserMedia({
+                        video: {
+                            width: { ideal: 1920 },
+                            height: { ideal: 1080 },
+                            facingMode: _camFacingMode
+                        }
+                    });
+                } catch (_) {
+                    stream = await navigator.mediaDevices.getUserMedia({ video: true });
+                }
+                _camStream = stream;
+                if (video) {
+                    video.srcObject = stream;
+                    await video.play();
+                }
+            } catch (err) {
+                console.warn('[CamModal] getUserMedia failed:', err.message);
+                if (errMsg) errMsg.classList.remove('hidden');
+                _camRelease();
+            }
+        }
+
+        /** Open the webcam modal and begin streaming */
+        async function openCameraModal() {
+            const modal = document.getElementById('cosmo-cam-modal');
+            if (!modal) return;
+            _camFacingMode = 'user';
+            modal.classList.remove('hidden');
+            modal.classList.add('flex');
+            await _camStart();
+        }
+
+        /** Close the webcam modal — camera light off immediately */
+        function closeCameraModal() {
+            _camRelease();
+            const modal = document.getElementById('cosmo-cam-modal');
+            if (modal) {
+                modal.classList.add('hidden');
+                modal.classList.remove('flex');
+            }
+        }
+
+        /** Switch between front and rear cameras */
+        async function _camSwitch() {
+            _camFacingMode = (_camFacingMode === 'user') ? 'environment' : 'user';
+            // Mirror only for front-facing
+            const video = document.getElementById('cam-video');
+            if (video) video.style.transform = (_camFacingMode === 'user') ? 'scaleX(-1)' : 'scaleX(1)';
+            await _camStart();
+        }
+
+        /** Fire shutter: flash → capture frame → hand to pipeline → close modal */
+        function _camCapture() {
+            const video  = document.getElementById('cam-video');
+            const canvas = document.getElementById('cam-canvas');
+            const vf     = document.getElementById('cam-viewfinder');
+            if (!video || !canvas) return;
+
+            const W = video.videoWidth  || 1280;
+            const H = video.videoHeight || 720;
+            canvas.width  = W;
+            canvas.height = H;
+
+            const ctx = canvas.getContext('2d');
+            // Un-mirror before saving (CSS mirror is cosmetic only)
+            const isFront = (_camFacingMode === 'user');
+            ctx.save();
+            if (isFront) {
+                ctx.translate(W, 0);
+                ctx.scale(-1, 1);
+            }
+            ctx.drawImage(video, 0, 0, W, H);
+            ctx.restore();
+
+            // ── White flash overlay ──
+            if (vf) {
+                const flash = document.createElement('div');
+                flash.id = 'cam-flash-overlay';
+                flash.style.cssText = 'position:absolute;inset:0;background:#fff;z-index:50;pointer-events:none;';
+                vf.appendChild(flash);
+                flash.addEventListener('animationend', () => flash.remove(), { once: true });
+            }
+
+            // 80 ms head-start for flash, then close & inject
+            setTimeout(() => {
+                closeCameraModal();
+                const dataUrl = canvas.toDataURL('image/jpeg', 0.92);
+                _injectCapturedImageIntoFlow(dataUrl);
+            }, 80);
+        }
+
+        /**
+         * Feed a captured dataURL directly into the existing scan pipeline.
+         * No backend routes or API contracts are touched here.
+         */
+        function _injectCapturedImageIntoFlow(dataUrl) {
+            questionnaireData.originalImageBase64 = dataUrl;
+            questionnaireData.imageBase64 = dataUrl;
+            questionnaireData.faceReport = null;
+            questionnaireData.answers = ['', '', '', ''];
+            questionnaireData.detected_concerns = [];
+            currentDiagnosisStep = 1;
+
+            const img = document.getElementById('preview-scan-img');
+            if (img) img.src = dataUrl;
+            switchView('state-preview');
+            showToast('Photo captured! Review and confirm your scan.', 'success');
+        }
+
+        // ── Wire up modal buttons (deferred until DOM ready) ──────────────────
+        document.addEventListener('DOMContentLoaded', () => {
+            const modal      = document.getElementById('cosmo-cam-modal');
+            const closeBtn   = document.getElementById('cam-close-btn');
+            const captureBtn = document.getElementById('cam-capture-btn');
+            const switchBtn  = document.getElementById('cam-switch-btn');
+            const cancelBtn  = document.getElementById('cam-cancel-btn');
+
+            if (closeBtn)   closeBtn.addEventListener('click',   closeCameraModal);
+            if (captureBtn) captureBtn.addEventListener('click', _camCapture);
+            if (switchBtn)  switchBtn.addEventListener('click',  _camSwitch);
+            if (cancelBtn)  cancelBtn.addEventListener('click',  closeCameraModal);
+
+            // Backdrop click closes
+            if (modal) {
+                modal.addEventListener('click', (e) => {
+                    if (e.target === modal) closeCameraModal();
+                });
+            }
+
+            // Escape key closes
+            document.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape') {
+                    const m = document.getElementById('cosmo-cam-modal');
+                    if (m && !m.classList.contains('hidden')) closeCameraModal();
+                }
+            });
+        });
 
         function handleFileSelected(file) {
             if (!file || !file.type.startsWith('image/')) {
